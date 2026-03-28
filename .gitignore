@@ -1,0 +1,12 @@
+# Compiled files
+*.o
+*.bin
+*.a
+*.out
+
+# Rust build artifacts
+target/
+
+# Windows
+Thumbs.db
+desktop.ini
