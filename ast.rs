@@ -320,6 +320,12 @@ pub enum Expr {
     BlockExpr(Block, Span),
     /// `self`
     SelfLit(Span),
+    /// Struct instantiation: `Token { kind: Eof, line: 1 }`
+    StructLit {
+        name: String,
+        fields: Vec<(String, Box<Expr>)>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -340,6 +346,7 @@ impl Expr {
             Expr::BinaryOp { span, .. } => span.clone(),
             Expr::UnaryOp { span, .. } => span.clone(),
             Expr::BlockExpr(_, s) => s.clone(),
+            Expr::StructLit { span, .. } => span.clone(),
         }
     }
 }

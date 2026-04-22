@@ -144,7 +144,17 @@ impl PtxEmitter {
                 }
             }
             Stmt::Return(_, _) => {}
-            _ => {} // Chisel blocks and new constructs
+            Stmt::Chisel(block, _) => {
+                writeln!(&mut self.ptx_buffer, "    // --- CHISEL INLINE PTX ---").unwrap();
+                for stmt in &block.stmts {
+                    if let Stmt::Expr(Expr::StringLit(s, _)) = stmt {
+                        writeln!(&mut self.ptx_buffer, "    {}", s).unwrap();
+                    } else {
+                        self.emit_stmt(stmt);
+                    }
+                }
+            }
+            _ => {} // Other constructs
         }
     }
 
@@ -199,6 +209,10 @@ impl PtxEmitter {
             Expr::GenericCall { func, .. } => {
                 // Same logic handles like a Path or Call
                  self.emit_expr(&**func, cache_policy)
+            }
+            Expr::StructLit { .. } => {
+                // PTX has no native struct instantiations in this prototype
+                "".into()
             }
             _ => "".into()
         }

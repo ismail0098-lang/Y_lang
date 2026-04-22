@@ -42,8 +42,18 @@ pub struct LlvmEmitter {
     functions: HashMap<String, String>,
     /// Track struct fields: StructName -> Vec<(FieldName, IRType)>
     structs: HashMap<String, Vec<(String, String)>>,
+    /// Track enums: EnumName -> has_data (true = tagged union, false = simple i32 tag)
+    enums: HashMap<String, bool>,
     /// Track whether the current block already has a terminator
     block_terminated: bool,
+    /// Store current cache policy during let bindings
+    current_cache_policy: Option<String>,
+    /// Hint for the load() intrinsic: the declared LHS type of the current let
+    current_load_hint: Option<String>,
+    /// Track all function names called during emission
+    called_functions: Vec<String>,
+    /// Track all function names defined in this module
+    defined_functions: Vec<String>,
 }
 
 impl LlvmEmitter {
@@ -58,7 +68,12 @@ impl LlvmEmitter {
             locals: HashMap::new(),
             functions: HashMap::new(),
             structs: HashMap::new(),
+            enums: HashMap::new(),
             block_terminated: false,
+            current_cache_policy: None,
+            current_load_hint: None,
+            called_functions: Vec::new(),
+            defined_functions: Vec::new(),
         }
     }
 
@@ -80,6 +95,94 @@ impl LlvmEmitter {
 
     fn emit_store(&mut self, val: &str, ptr: &str, ty: &str) {
         writeln!(&mut self.output, "  store {} {}, ptr {}", ty, val, ptr).unwrap();
+    }
+
+    /// Insert an LLVM conversion instruction when src_ty != dst_ty.
+    /// Returns the new SSA name holding the converted value, or the
+    /// original `val` if no conversion is needed.
+    fn emit_coerce(&mut self, val: &str, src_ty: &str, dst_ty: &str) -> String {
+        if src_ty == dst_ty {
+            return val.to_string();
+        }
+
+        // Named struct types (like %Token) cannot be converted via scalar instructions.
+        // If either side is a named type, we pass through without conversion.
+        let src_is_struct = src_ty.starts_with('%');
+        let dst_is_struct = dst_ty.starts_with('%');
+        if src_is_struct || dst_is_struct {
+            // If both are structs but different, warn; otherwise just pass through
+            writeln!(&mut self.output, "  ; NOTE: struct type coerce pass-through {} -> {}", src_ty, dst_ty).unwrap();
+            return val.to_string();
+        }
+
+        let tmp = self.fresh_tmp();
+        let src_float = src_ty == "float" || src_ty == "double" || src_ty == "half";
+        let dst_float = dst_ty == "float" || dst_ty == "double" || dst_ty == "half";
+        let src_ptr   = src_ty == "ptr";
+        let dst_ptr   = dst_ty == "ptr";
+        let src_int   = !src_float && !src_ptr;
+        let dst_int   = !dst_float && !dst_ptr;
+
+        if src_ptr && dst_int {
+            // ptr -> integer
+            writeln!(&mut self.output, "  {} = ptrtoint ptr {} to {}", tmp, val, dst_ty).unwrap();
+        } else if src_int && dst_ptr {
+            // integer -> ptr
+            writeln!(&mut self.output, "  {} = inttoptr {} {} to ptr", tmp, src_ty, val).unwrap();
+        } else if src_float && dst_int {
+            // float -> integer (signed)
+            writeln!(&mut self.output, "  {} = fptosi {} {} to {}", tmp, src_ty, val, dst_ty).unwrap();
+        } else if src_int && dst_float {
+            // integer -> float (signed)
+            writeln!(&mut self.output, "  {} = sitofp {} {} to {}", tmp, src_ty, val, dst_ty).unwrap();
+        } else if src_float && dst_float {
+            // float <-> float (truncate or extend)
+            let src_bits: u32 = if src_ty == "double" { 64 } else if src_ty == "float" { 32 } else { 16 };
+            let dst_bits: u32 = if dst_ty == "double" { 64 } else if dst_ty == "float" { 32 } else { 16 };
+            if src_bits > dst_bits {
+                writeln!(&mut self.output, "  {} = fptrunc {} {} to {}", tmp, src_ty, val, dst_ty).unwrap();
+            } else {
+                writeln!(&mut self.output, "  {} = fpext {} {} to {}", tmp, src_ty, val, dst_ty).unwrap();
+            }
+        } else if src_int && dst_int {
+            // integer <-> integer (different widths)
+            let src_bits = Self::int_bits(src_ty);
+            let dst_bits = Self::int_bits(dst_ty);
+            if src_bits > dst_bits {
+                writeln!(&mut self.output, "  {} = trunc {} {} to {}", tmp, src_ty, val, dst_ty).unwrap();
+            } else {
+                writeln!(&mut self.output, "  {} = sext {} {} to {}", tmp, src_ty, val, dst_ty).unwrap();
+            }
+        } else if src_ptr && dst_ptr {
+            return val.to_string(); // ptr -> ptr, no conversion needed in opaque-ptr mode
+        } else if src_float && dst_ptr {
+            // float -> ptr via intermediate int
+            let int_tmp = self.fresh_tmp();
+            writeln!(&mut self.output, "  {} = fptosi {} {} to i64", int_tmp, src_ty, val).unwrap();
+            writeln!(&mut self.output, "  {} = inttoptr i64 {} to ptr", tmp, int_tmp).unwrap();
+        } else if src_ptr && dst_float {
+            // ptr -> float via intermediate int
+            let int_tmp = self.fresh_tmp();
+            writeln!(&mut self.output, "  {} = ptrtoint ptr {} to i64", int_tmp, val).unwrap();
+            writeln!(&mut self.output, "  {} = sitofp i64 {} to {}", tmp, int_tmp, dst_ty).unwrap();
+        } else {
+            // Unknown conversion — pass through without conversion
+            writeln!(&mut self.output, "  ; WARN: unhandled coerce {} -> {}", src_ty, dst_ty).unwrap();
+            return val.to_string();
+        }
+        tmp
+    }
+
+    /// Return bit width for an LLVM integer type string.
+    fn int_bits(ty: &str) -> u32 {
+        match ty {
+            "i1" => 1,
+            "i8" => 8,
+            "i16" => 16,
+            "i32" => 32,
+            "i64" => 64,
+            _ => 64, // conservative fallback
+        }
     }
 
     /// Register a string constant and return its global name
@@ -108,11 +211,13 @@ impl LlvmEmitter {
             Type::Primitive(name, _) => match name.as_str() {
                 "I32" | "u32" | "i32" => "i32".into(),
                 "I64" | "usize" | "i64" => "i64".into(),
+                "F16" | "f16" => "half".into(),
                 "F32" | "f32" => "float".into(),
                 "F64" | "f64" => "double".into(),
                 "bool" => "i1".into(),
                 "char" | "i8" | "u8" => "i8".into(),
                 "I16" | "u16" | "i16" => "i16".into(),
+                "String" => "ptr".into(),
                 _ => "i32".into(),
             },
             Type::Ident(name, _) => match name.as_str() {
@@ -125,7 +230,18 @@ impl LlvmEmitter {
                 "I16" | "u16" | "i16" => "i16".into(),
                 "String" => "ptr".into(),
                 "Vec" => "ptr".into(),
-                _ => format!("%{}", name), // Custom struct/enum types passed by value
+                other => {
+                    // Check if this is a known simple enum (maps to i32)
+                    if let Some(has_data) = self.enums.get(other) {
+                        if *has_data {
+                            format!("%{}", other) // tagged union struct type
+                        } else {
+                            "i32".into() // simple enum = integer tag
+                        }
+                    } else {
+                        format!("%{}", other) // Custom struct types passed by value
+                    }
+                }
             },
             Type::Reference { .. } => "ptr".into(),
             Type::Generic { base, .. } => match base.as_str() {
@@ -138,7 +254,7 @@ impl LlvmEmitter {
 
     // ── Entry Point ─────────────────────────────────────────
 
-    pub fn emit_program(&mut self, prog: &Program) -> String {
+    pub fn emit_program(&mut self, prog: &Program, profile: &crate::sentinel::HardwareProfile) -> String {
         // Phase 0: Collect struct layouts and function signatures
         for item in &prog.items {
             match item {
@@ -162,6 +278,10 @@ impl LlvmEmitter {
                 Item::Kernel(k) => {
                     self.functions.insert(k.name.clone(), "void".into());
                 }
+                Item::Enum(e) => {
+                    let has_data = e.variants.iter().any(|v| v.fields.is_some());
+                    self.enums.insert(e.name.clone(), has_data);
+                }
                 _ => {}
             }
         }
@@ -183,7 +303,7 @@ impl LlvmEmitter {
         std::mem::swap(&mut self.output, &mut func_output);
 
         // Phase 2: assemble final output with constants at module scope
-        self.emit_prelude();
+        self.emit_prelude(profile);
 
         // Emit struct definitions
         self.wln("; --- Struct Definitions ---");
@@ -231,6 +351,7 @@ impl LlvmEmitter {
         self.wln("declare void @exit(i32) noreturn");
         self.wln("declare void @println(ptr)");
         self.wln("declare void @print_int(i32)");
+        self.wln("declare void @llvm.prefetch.p0(ptr nocapture readonly, i32, i32, i32)");
         self.wln("");
 
         // Emit all collected string constants at module scope
@@ -250,16 +371,62 @@ impl LlvmEmitter {
         // Append function bodies
         self.output.push_str(&func_output);
 
+        // Auto-declare any called functions that are not defined or already declared
+        let runtime_set: std::collections::HashSet<&str> = [
+            "ystr_new", "ystr_push", "ystr_push_str", "ystr_eq_cstr", "ystr_len",
+            "ystr_char_at", "ystr_clone", "yvec_new", "yvec_push", "yvec_get",
+            "yvec_len", "yfile_read_to_string", "yfile_write", "printf", "malloc",
+            "free", "exit", "println", "print_int", "llvm.prefetch.p0", "load",
+        ].iter().cloned().collect();
+
+        let defined_set: std::collections::HashSet<String> = self.defined_functions.iter().cloned().collect();
+        let mut auto_declared: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut extern_decls = String::new();
+
+        for fname in &self.called_functions {
+            if !runtime_set.contains(fname.as_str())
+                && !defined_set.contains(fname)
+                && !auto_declared.contains(fname)
+            {
+                // Look up the return type from the functions table, default to i32
+                let ret_ty = self.functions.get(fname).cloned().unwrap_or_else(|| "i32".into());
+                writeln!(&mut extern_decls, "declare {} @{}(...)", ret_ty, fname).unwrap();
+                auto_declared.insert(fname.clone());
+            }
+        }
+
+        if !auto_declared.is_empty() {
+            let marker = "; --- External Runtime Declarations ---\n";
+            if let Some(pos) = self.output.find(marker) {
+                let insert_at = pos + marker.len();
+                self.output.insert_str(insert_at, &extern_decls);
+            }
+        }
+
+        // Nontemporal metadata definition
+        self.wln("!0 = !{i32 1}");
+
         self.output.clone()
     }
 
-    fn emit_prelude(&mut self) {
+    fn emit_prelude(&mut self, profile: &crate::sentinel::HardwareProfile) {
         self.wln("; ================================================");
         self.wln(";  Generated by Y-Lang Compiler — LLVM IR Backend");
+        self.wln(&format!(";  Hardware Profile: AVX={}, AVX512={}, L2 Line={}B", profile.has_avx, profile.has_avx512, profile.l2_line_size));
         self.wln("; ================================================");
         self.wln("");
         self.wln("target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\"");
         self.wln("target triple = \"x86_64-pc-windows-msvc\"");
+        self.wln("");
+        
+        // Dynamically inject LLVM function attributes based on Sentinel Probe
+        if profile.has_avx512 {
+            self.wln("attributes #0 = { \"target-cpu\"=\"skylake-avx512\" \"target-features\"=\"+avx512f,+avx512cd,+avx512bw,+avx512dq,+avx512vl\" }");
+        } else if profile.has_avx {
+            self.wln("attributes #0 = { \"target-cpu\"=\"haswell\" \"target-features\"=\"+avx2,+avx\" }");
+        } else {
+            self.wln("attributes #0 = { \"target-cpu\"=\"x86-64\" }");
+        }
         self.wln("");
     }
 
@@ -280,6 +447,7 @@ impl LlvmEmitter {
         } else {
             f.name.clone()
         };
+        self.defined_functions.push(func_name.clone());
 
         let params: Vec<String> = f.params.iter().map(|p| {
             let ty = self.emit_type(&p.ty);
@@ -287,7 +455,7 @@ impl LlvmEmitter {
         }).collect();
         let params_str = params.join(", ");
 
-        writeln!(&mut self.output, "define {} @{}({}) {{", ret_type, func_name, params_str).unwrap();
+        writeln!(&mut self.output, "define {} @{}({}) #0 {{", ret_type, func_name, params_str).unwrap();
         self.wln("entry:");
 
         // Alloca for all params so we can store/load them by name
@@ -370,8 +538,9 @@ impl LlvmEmitter {
             format!("{} %{}.arg", ty, p.name)
         }).collect();
 
-        writeln!(&mut self.output, "define void @{}({}) {{", k.name, params.join(", ")).unwrap();
+        writeln!(&mut self.output, "define void @{}({}) #0 {{", k.name, params.join(", ")).unwrap();
         self.wln("entry:");
+        self.defined_functions.push(k.name.clone());
         
         for p in &k.params {
             let ty = self.emit_type(&p.ty);
@@ -412,25 +581,40 @@ impl LlvmEmitter {
 
     fn emit_stmt(&mut self, stmt: &Stmt, ret_type: &str) {
         match stmt {
-            Stmt::Let { name, init, .. } => {
+            Stmt::Let { name, init, cache_policy, .. } => {
+                if let Some(cp) = cache_policy {
+                    self.current_cache_policy = Some(cp.policy.clone());
+                }
+
                 // alloca is already done in entry
                 if let Some(init_expr) = init {
+                    // Set load hint so `load()` intrinsic uses the LHS type
+                    let dst_ty = self.locals.get(name).cloned().unwrap_or_else(|| "i32".into());
+                    self.current_load_hint = Some(dst_ty.clone());
                     let val = self.emit_expr(init_expr);
-                    let ir_ty = self.locals.get(name).cloned().unwrap_or_else(|| "i32".into());
-                    self.emit_store(&val, &format!("%{}", name), &ir_ty);
+                    let val_ty = self.infer_type(init_expr);
+                    self.current_load_hint = None;
+                    let coerced = self.emit_coerce(&val, &val_ty, &dst_ty);
+                    self.emit_store(&coerced, &format!("%{}", name), &dst_ty);
                 }
+
+                self.current_cache_policy = None;
             }
             Stmt::Assign { target, value, .. } => {
                 let val = self.emit_expr(value);
-                let ty = self.infer_type(value);
+                let val_ty = self.infer_type(value);
+                let dst_ty = self.infer_type(target);
                 // Get the address of the target (don't load it)
                 let target_addr = self.emit_lvalue(target);
-                self.emit_store(&val, &target_addr, &ty);
+                let coerced = self.emit_coerce(&val, &val_ty, &dst_ty);
+                self.emit_store(&coerced, &target_addr, &dst_ty);
             }
             Stmt::Return(expr, _) => {
                 if let Some(e) = expr {
                     let val = self.emit_expr(e);
-                    writeln!(&mut self.output, "  ret {} {}", ret_type, val).unwrap();
+                    let val_ty = self.infer_type(e);
+                    let coerced = self.emit_coerce(&val, &val_ty, ret_type);
+                    writeln!(&mut self.output, "  ret {} {}", ret_type, coerced).unwrap();
                 } else {
                     self.wln("  ret void");
                 }
@@ -534,8 +718,85 @@ impl LlvmEmitter {
                 self.emit_store(&result, &addr, &ty);
             }
             Stmt::Chisel(block, _) => {
-                self.wln("  ; --- chisel block (privileged) ---");
-                self.emit_block_body(block, ret_type);
+                self.wln("  ; --- CHISEL INLINE ASM ---");
+                for stmt in &block.stmts {
+                    if let Stmt::Expr(Expr::StringLit(s, _)) = stmt {
+                        self.wln(&format!("  call void asm sideeffect \"{}\", \"~{{memory}},~{{dirflag}},~{{fpsr}},~{{flags}}\"()", s));
+                    } else {
+                        self.emit_stmt(stmt, ret_type);
+                    }
+                }
+            }
+            Stmt::Match { scrutinee, arms, .. } => {
+                let scrut_val = self.emit_expr(scrutinee);
+                let scrut_ty = self.infer_type(scrutinee);
+                let merge_lbl = self.fresh_label("match.end");
+
+                // Emit as cascading if-else (LLVM has switch but only for integer constants)
+                let mut arm_labels: Vec<(String, String)> = Vec::new(); // (test_lbl, body_lbl)
+                for _ in arms {
+                    let test_lbl = self.fresh_label("match.test");
+                    let body_lbl = self.fresh_label("match.arm");
+                    arm_labels.push((test_lbl, body_lbl));
+                }
+
+                if !arms.is_empty() {
+                    writeln!(&mut self.output, "  br label %{}", arm_labels[0].0).unwrap();
+                }
+
+                for (i, arm) in arms.iter().enumerate() {
+                    let (test_lbl, body_lbl) = &arm_labels[i];
+                    let next_test = if i + 1 < arms.len() {
+                        arm_labels[i + 1].0.clone()
+                    } else {
+                        merge_lbl.clone()
+                    };
+
+                    writeln!(&mut self.output, "{}:", test_lbl).unwrap();
+                    match &arm.pattern {
+                        MatchPattern::Wildcard(_) => {
+                            writeln!(&mut self.output, "  br label %{}", body_lbl).unwrap();
+                        }
+                        MatchPattern::Literal(lit) => {
+                            let lit_val = self.emit_expr(lit);
+                            let cmp = self.fresh_tmp();
+                            let cmp_instr = if scrut_ty == "float" || scrut_ty == "double" { "fcmp oeq" } else { "icmp eq" };
+                            writeln!(&mut self.output, "  {} = {} {} {}, {}", cmp, cmp_instr, scrut_ty, scrut_val, lit_val).unwrap();
+                            writeln!(&mut self.output, "  br i1 {}, label %{}, label %{}", cmp, body_lbl, next_test).unwrap();
+                        }
+                        MatchPattern::Ident(name, _) => {
+                            // Bind variable then always match
+                            let cmp = self.fresh_tmp();
+                            writeln!(&mut self.output, "  {} = icmp eq {} {}, {}", cmp, scrut_ty, scrut_val, name).unwrap();
+                            writeln!(&mut self.output, "  br i1 {}, label %{}, label %{}", cmp, body_lbl, next_test).unwrap();
+                        }
+                        MatchPattern::EnumVariant { path, variant, .. } => {
+                            // Compare tag value (simple enum = i32)
+                            // Lookup variant index
+                            let tag_name = if path.is_empty() {
+                                variant.clone()
+                            } else {
+                                format!("{}_{}", path, variant)
+                            };
+                            let cmp = self.fresh_tmp();
+                            writeln!(&mut self.output, "  {} = icmp eq {} {}, {} ; enum {}", cmp, scrut_ty, scrut_val, tag_name, variant).unwrap();
+                            writeln!(&mut self.output, "  br i1 {}, label %{}, label %{}", cmp, body_lbl, next_test).unwrap();
+                        }
+                    }
+
+                    writeln!(&mut self.output, "{}:", body_lbl).unwrap();
+                    self.block_terminated = false;
+                    self.emit_expr(&arm.body);
+                    if !self.block_terminated {
+                        writeln!(&mut self.output, "  br label %{}", merge_lbl).unwrap();
+                    }
+                }
+
+                writeln!(&mut self.output, "{}:", merge_lbl).unwrap();
+                self.block_terminated = false;
+            }
+            Stmt::TypeAlias { .. } => {
+                // Type aliases are resolved at compile time — no IR emission needed
             }
             _ => {}
         }
@@ -634,6 +895,7 @@ impl LlvmEmitter {
             }
             Expr::Call { func, args, .. } => {
                 let func_name = self.emit_call_target(func);
+                self.called_functions.push(func_name.clone());
                 let mut arg_strs = Vec::new();
                 for a in args {
                     let v = self.emit_expr(a);
@@ -642,6 +904,32 @@ impl LlvmEmitter {
                 }
 
                 match func_name.as_str() {
+                    "load" => {
+                        let ptr_val = self.emit_expr(&args[0]);
+                        let tmp = self.fresh_tmp();
+                        let mut metadata = String::new();
+                        
+                        if let Some(policy) = &self.current_cache_policy.clone() {
+                            if policy == "L2_EVICT_FIRST" {
+                                metadata = ", !nontemporal !0".to_string();
+                            } else if policy == "L2_PERSIST" {
+                                // 0 = Read, 3 = High temporal locality, 1 = Data cache
+                                writeln!(&mut self.output, "  call void @llvm.prefetch.p0(ptr {}, i32 0, i32 3, i32 1)", ptr_val).unwrap();
+                            }
+                        }
+                        
+                        // Infer load type from the LHS variable's alloca type.
+                        // The caller (emit_stmt for Let) will coerce if needed.
+                        // We use the type annotation from `self.current_let_type` if
+                        // available, otherwise fall back to the pointer element type.
+                        let load_ty = self.current_load_hint.clone().unwrap_or_else(|| {
+                            // Infer from args: if loading from a typed pointer, use that type
+                            let arg_ty = self.infer_type(&args[0]);
+                            if arg_ty == "ptr" { "double".into() } else { arg_ty }
+                        });
+                        writeln!(&mut self.output, "  {} = load {}, ptr {}{}", tmp, load_ty, ptr_val, metadata).unwrap();
+                        return tmp;
+                    }
                     "println" => {
                         if !args.is_empty() {
                             let tmp = self.fresh_tmp();
@@ -693,6 +981,51 @@ impl LlvmEmitter {
                 self.emit_load(&lval, "i32") // Fallback
             }
             Expr::SelfLit(_) => "%self".into(),
+            Expr::StructLit { name, fields, .. } => {
+                let ty = format!("%{}", name);
+                let mut current_val = "undef".to_string();
+                
+                for (fname, fexpr) in fields {
+                    let mut field_idx = 0;
+                    let mut field_ty = "i32".to_string();
+                    if let Some(struct_fields) = self.structs.get(name).cloned() {
+                        for (i, (sfname, sty)) in struct_fields.iter().enumerate() {
+                            if sfname == fname { 
+                                field_idx = i; 
+                                field_ty = sty.clone();
+                                break; 
+                            }
+                        }
+                    }
+                    let val = self.emit_expr(fexpr);
+                    let val_ty = self.infer_type(fexpr);
+                    let coerced = self.emit_coerce(&val, &val_ty, &field_ty);
+                    let new_val = self.fresh_tmp();
+                    writeln!(&mut self.output, "  {} = insertvalue {} {}, {} {}, {}", new_val, ty, current_val, field_ty, coerced, field_idx).unwrap();
+                    current_val = new_val;
+                }
+                current_val
+            }
+            Expr::GenericCall { func, args, .. } => {
+                // Generics are erased at IR level — emit as a regular call
+                let func_name = self.emit_call_target(func);
+                self.called_functions.push(func_name.clone());
+                let mut arg_strs = Vec::new();
+                for a in args {
+                    let v = self.emit_expr(a);
+                    let ty = self.infer_type(a);
+                    arg_strs.push(format!("{} {}", ty, v));
+                }
+                let ret_ty = self.functions.get(&func_name).cloned().unwrap_or_else(|| "i32".into());
+                let tmp = self.fresh_tmp();
+                if ret_ty == "void" {
+                    writeln!(&mut self.output, "  call void @{}({})", func_name, arg_strs.join(", ")).unwrap();
+                    tmp
+                } else {
+                    writeln!(&mut self.output, "  {} = call {} @{}({})", tmp, ret_ty, func_name, arg_strs.join(", ")).unwrap();
+                    tmp
+                }
+            }
             _ => {
                 let tmp = self.fresh_tmp();
                 writeln!(&mut self.output, "  {} = add i32 0, 0 ; unhandled expr", tmp).unwrap();
@@ -750,6 +1083,17 @@ impl LlvmEmitter {
             Expr::Ident(name, _) => self.locals.get(name).cloned().unwrap_or_else(|| "i32".into()),
             Expr::Call { func, .. } => {
                 let func_name = self.emit_call_target(func);
+                match func_name.as_str() {
+                    "load" => {
+                        // The load() intrinsic uses current_load_hint or defaults to double
+                        self.current_load_hint.clone().unwrap_or_else(|| "double".into())
+                    }
+                    "println" | "print_int" => "i32".into(),
+                    _ => self.functions.get(&func_name).cloned().unwrap_or_else(|| "i32".into()),
+                }
+            }
+            Expr::GenericCall { func, .. } => {
+                let func_name = self.emit_call_target(func);
                 self.functions.get(&func_name).cloned().unwrap_or_else(|| "i32".into())
             }
             Expr::BinaryOp { op, left, .. } => {
@@ -769,6 +1113,7 @@ impl LlvmEmitter {
                 }
                 "i32".into()
             }
+            Expr::StructLit { name, .. } => format!("%{}", name),
             _ => "i32".into(),
         }
     }

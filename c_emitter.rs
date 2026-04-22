@@ -874,6 +874,14 @@ static void yfile_write(const YStr* path_str, const YStr* content) {{
                 }
                 "((void)0)".into()
             }
+            Expr::StructLit { name, fields, .. } => {
+                let mut assigns = Vec::new();
+                for (fname, fexpr) in fields {
+                    let val = self.emit_expr(fexpr);
+                    assigns.push(format!(".{} = {}", fname, val));
+                }
+                format!("({}){{ {} }}", name, assigns.join(", "))
+            }
         }
     }
 

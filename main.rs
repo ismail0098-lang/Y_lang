@@ -18,6 +18,7 @@ mod cpu_emitter;
 mod c_emitter;
 mod llvm_emitter;
 mod avx_wrapper;
+mod sentinel;
 
 use std::env;
 use std::fs;
@@ -36,6 +37,9 @@ fn main() {
     println!("========================================");
     println!("=== Y-Lang Compiler v0.1 (Prototype) ===");
     println!("========================================\n");
+
+    // Phase 0: Sentinel Hardware Probe
+    let hw_profile = sentinel::check_or_probe_hardware();
 
     let args: Vec<String> = env::args().collect();
 
@@ -78,10 +82,23 @@ fn main() {
             return content;
         }
 
+        @safe
+        fn test_structs() {
+            let t = Token { kind: 0, line: 42, lexeme: "EOF" };
+            println(t.lexeme);
+            print_int(t.line);
+        }
+
         @target(CPU_AVX512)
         kernel matmul(A: GlobalMemory<F16>, B: GlobalMemory<F16>, C: GlobalMemory<F32>) {
             type ATile = SmemLayout<F16, rows=16, cols=64, swizzle=330>;
             let smem_A = SharedMemory::alloc<ATile>();
+
+            @cache_policy(L2_PERSIST, reuse_count=8)
+            let weights: F16 = load(A);
+
+            @cache_policy(L2_EVICT_FIRST)
+            let act: F16 = load(B);
             
             let acc: Fragment<MMA_m16n8k16, D, F32> = Fragment::zero();
             let pipe: Pipeline<stages=2, layout=ATile> = Pipeline::init();
@@ -94,6 +111,11 @@ fn main() {
                 let frag_A: Fragment<MMA_m16n8k16, A, F16> = ldmatrix(smem_A);
                 let frag_B: Fragment<MMA_m16n8k16, B, F16> = ldmatrix(smem_A);
                 let frag_C: Fragment<MMA_m16n8k16, C, F32> = ldmatrix(smem_A);
+                
+                chisel {
+                    "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {r0,r1,r2,r3}, [smem_ptr];";
+                }
+
                 acc = mma_sync(frag_A, frag_B, frag_C); 
             }
 
@@ -180,7 +202,7 @@ fn main() {
     if emit_llvm {
         println!("[4/4] Emitting LLVM IR...");
         let mut emitter = LlvmEmitter::new();
-        let ll_output = emitter.emit_program(&ast);
+        let ll_output = emitter.emit_program(&ast, &hw_profile);
         let ll_path = output_path.replace(".c", ".ll");
         match fs::write(&ll_path, &ll_output) {
             Ok(_) => println!("      -> Written to: {}", ll_path),

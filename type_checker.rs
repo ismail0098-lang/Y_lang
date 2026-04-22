@@ -287,6 +287,12 @@ impl TypeChecker {
                  // E.g., `SharedMemory::alloc<ATile>()`
                  SemanticType::Unknown
             }
+            Expr::StructLit { name, fields, .. } => {
+                for (_, expr) in fields {
+                    self.check_expr(expr);
+                }
+                SemanticType::Primitive(name.clone())
+            }
             _ => SemanticType::Unknown
         }
     }

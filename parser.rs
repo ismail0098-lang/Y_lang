@@ -973,6 +973,29 @@ impl Parser {
             TokenKind::SelfKw => { self.advance(); Ok(Expr::SelfLit(span)) },
             _ => {
                 if let Ok(name) = self.parse_any_ident() {
+                    // Check for Struct Literal: `Ident { field: expr }` or `Ident {}`
+                    if self.check(TokenKind::LBrace) {
+                        let look1 = self.tokens.get(self.pos + 1).map(|t| &t.kind).unwrap_or(&TokenKind::Eof);
+                        let look2 = self.tokens.get(self.pos + 2).map(|t| &t.kind).unwrap_or(&TokenKind::Eof);
+                        
+                        let is_struct = matches!(look1, TokenKind::RBrace) || 
+                                        (matches!(look1, TokenKind::Ident(_)) && matches!(look2, TokenKind::Colon));
+                        
+                        if is_struct {
+                            self.advance(); // consume '{'
+                            let mut fields = Vec::new();
+                            while !self.check(TokenKind::RBrace) && !self.check(TokenKind::Eof) {
+                                let f_name = self.parse_any_ident()?;
+                                self.expect(TokenKind::Colon, "':' after struct field name")?;
+                                let f_expr = self.parse_expr()?;
+                                fields.push((f_name, Box::new(f_expr)));
+                                if !self.match_token(TokenKind::Comma) { break; }
+                            }
+                            self.expect(TokenKind::RBrace, "'}' after struct fields")?;
+                            return Ok(Expr::StructLit { name, fields, span });
+                        }
+                    }
+
                     // Try to parse namespace path like `String::clone`
                     if self.match_token(TokenKind::ColonColon) {
                         if let Ok(member) = self.parse_any_ident() {
