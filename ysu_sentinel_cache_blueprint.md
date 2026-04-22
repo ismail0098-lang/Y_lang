@@ -19,4 +19,4 @@ Instead of relying on JIT overhead or manual `@gpu` spec feeding, the Y compiler
 - **Result:** 100% of the Auto-Sentient optimization with exactly zero compile-time or runtime penalty after the initial run. 
 
 ---
-*System Note:* Blueprint logged successfully. Physical hardware requires maintenance cycle (sleep).
+
