@@ -1,0 +1,51 @@
+import lib;
+import lexer;
+import parser;
+import c_emitter;
+import llvm_emitter;
+
+@unsafe
+fn main() {
+    println("--- Y-Lang Self-Hosted Compiler ---");
+
+    // 1. Read source
+    let source_path: String = String::new("test.yy");
+    let source: String = File::read_to_string(&source_path);
+
+    // 2. Lexer
+    let mut lexer: Lexer = Lexer::new(&source);
+    let tokens: Vec = Lexer::tokenize(&mut lexer);
+    let token_count: usize = Vec::len(&tokens);
+    print("Lexed tokens: ");
+    print_int(token_count);
+    println("");
+
+    // 3. Parser
+    let mut arena: AstArena = AstArena::new();
+    let mut p: Parser = Parser::new(tokens, token_count);
+    Parser::parse_program(&mut p, &mut arena);
+
+    // 4. Emitter (C)
+    let mut emitter: CEmitter = CEmitter::new();
+    // 4.5 Emitter (LLVM)
+    let mut ll_emitter: LlvmEmitter = LlvmEmitter::new();
+    
+    let mut f: usize = 0;
+    let func_count: usize = Vec::len(&arena.funcs);
+    while f < func_count {
+        CEmitter::emit_func(&mut emitter, &arena, f);
+        LlvmEmitter::emit_func(&mut ll_emitter, &arena, f);
+        f += 1;
+    }
+
+    // 5. Output C
+    let out_path: String = String::new("test.c");
+    File::write(&out_path, &emitter.c_buffer);
+    
+    // 6. Output LLVM
+    let ll_path: String = String::new("test.ll");
+    File::write(&ll_path, &ll_emitter.buffer);
+    
+    println("Successfully compiled test.yy -> test.c and test.ll");
+    return;
+}

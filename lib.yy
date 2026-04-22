@@ -1,0 +1,97 @@
+// ============================================================
+//  Y-Lang Standard Library Interfaces
+//  lib.y
+//
+//  This file contains the forward declarations and standard
+//  library wrappers that map Y-Lang standard types (Vec, String, File)
+//  to the C11 runtime backend equivalents.
+// ============================================================
+
+// ── Array / Vector (Maps to YVec in C backend) ──────────────
+
+@target(CPU_AVX512)
+impl Vec {
+    // Note: C-backend natively intercepts generic parameters for Vec
+    
+    // Allocates a new empty Vec.
+    // In C: maps directly to yvec_new(sizeof(T))
+    fn new(elem_size: I32) -> Vec {
+        // Backend intercepts this or we use native C runtime name
+        return yvec_new(elem_size);
+    }
+    
+    // Pushes an element to the Vec.
+    fn push(v: &mut Vec, elem: &char) {
+        yvec_push(v, elem);
+    }
+
+    // Free the memory
+    fn free(v: &mut Vec) {
+        yvec_free(v);
+    }
+    
+    // Returns length
+    fn len(v: &Vec) -> usize {
+        return yvec_len(v);
+    }
+    
+    // Returns char element
+    fn get_char(v: &Vec, i: usize) -> char {
+        return yvec_get_char(v, i);
+    }
+}
+
+// ── String (Maps to YStr in C backend) ──────────────────────
+
+@target(CPU_AVX512)
+impl String {
+    // Length of string
+    fn len(s: &String) -> usize {
+        return ystr_len(s);
+    }
+    // Creates a copy of the string
+    fn clone(s: &String) -> String {
+        return ystr_clone(s);
+    }
+
+    // Appends a character
+    fn push(s: &mut String, c: char) {
+        ystr_push(s, c);
+    }
+
+    // Appends another string
+    fn push_str(s: &mut String, other: &String) {
+        ystr_push_str(s, other);
+    }
+
+    // Equivalency check
+    fn eq(a: &String, b: &String) -> bool {
+        return ystr_eq(a, b);
+    }
+    
+    fn eq_cstr(a: &String, b: &char) -> bool {
+        return ystr_eq_cstr(a, b);
+    }
+
+    // Returns character at index
+    fn char_at(s: &String, i: usize) -> char {
+        return ystr_char_at(s, i);
+    }
+
+    fn free(s: &mut String) {
+        ystr_free(s);
+    }
+}
+
+// ── File I/O ─────────────────────────────────────────────
+
+@target(CPU_AVX512)
+impl File {
+    fn read_to_string(path: &String) -> String {
+        return yfile_read_to_string(path);
+    }
+    
+    fn write(path: &String, content: &String) {
+        yfile_write(path, content);
+    }
+}

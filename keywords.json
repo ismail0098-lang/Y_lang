@@ -1,0 +1,161 @@
+{
+  "version": "0.1",
+  "language": "Y-Lang",
+  "keywords": [
+    "kernel",
+    "let",
+    "type",
+    "for",
+    "in",
+    "step",
+    "return",
+    "if",
+    "else",
+    "true",
+    "false",
+    "const",
+    "pub",
+    "mut",
+    "unsafe",
+    "wait",
+    "emit",
+    "load",
+    "store",
+    "barrier"
+  ],
+  "memory_space_types": [
+    "GlobalMemory",
+    "L2Memory",
+    "SharedMemory",
+    "RegisterFile"
+  ],
+  "layout_types": [
+    "SmemLayout",
+    "Swizzle",
+    "NoSwizzle",
+    "Pipeline",
+    "Transfer",
+    "Fragment"
+  ],
+  "mma_ops": [
+    "MMA_m16n8k16",
+    "MMA_m16n8k8",
+    "MMA_m16n8k4",
+    "MMA_m8n8k4"
+  ],
+  "fragment_roles": [
+    "A",
+    "B",
+    "C",
+    "D"
+  ],
+  "dtypes": [
+    "F16",
+    "BF16",
+    "TF32",
+    "F32",
+    "F64",
+    "I8",
+    "I16",
+    "I32",
+    "I64",
+    "U8",
+    "U16",
+    "U32",
+    "U64",
+    "u3",
+    "u32",
+    "u64",
+    "i32",
+    "i64",
+    "f32",
+    "f64",
+    "bool"
+  ],
+  "transfer_policies": [
+    "Async",
+    "Sync"
+  ],
+  "cache_policies": [
+    "L2_PERSIST",
+    "L2_EVICT_FIRST",
+    "L2_EVICT_LAST",
+    "L2_STREAM"
+  ],
+  "hardware_targets": [
+    "RTX_4070",
+    "RTX_4090",
+    "RTX_3090",
+    "H100",
+    "A100",
+    "CPU_AVX2",
+    "CPU_AVX512"
+  ],
+  "builtins": [
+    "cp_async",
+    "ldmatrix",
+    "mma_sync",
+    "barrier::sync",
+    "pipe",
+    "Fragment::zero",
+    "SharedMemory::alloc",
+    "Pipeline::init"
+  ],
+  "attributes": [
+    "@target",
+    "@cache_policy",
+    "@ptx_emit",
+    "@avx_emit",
+    "@inline",
+    "@noinline",
+    "@align"
+  ],
+  "operators": [
+    "->",
+    "..",
+    "::",
+    ":",
+    "=",
+    "==",
+    "!=",
+    "<",
+    ">",
+    "<=",
+    ">=",
+    "+",
+    "-",
+    "*",
+    "/",
+    "%",
+    "&",
+    "|",
+    "^",
+    "!",
+    "&&",
+    "||",
+    "<<",
+    ">>",
+    "+=",
+    "-=",
+    "*=",
+    "/="
+  ],
+  "delimiters": [
+    "{",
+    "}",
+    "(",
+    ")",
+    "[",
+    "]",
+    "<",
+    ">",
+    ";",
+    ",",
+    "."
+  ],
+  "comment_syntax": {
+    "line": "//",
+    "block_start": "/*",
+    "block_end": "*/"
+  }
+}
