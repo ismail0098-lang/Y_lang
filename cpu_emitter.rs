@@ -24,6 +24,25 @@ impl CpuEmitter {
         writeln!(&mut buffer, "// GENERATED NATIVE CPU EXECUTABLE").unwrap();
         writeln!(&mut buffer, "// ===========================================================").unwrap();
         writeln!(&mut buffer, "use crate::avx_wrapper::*;").unwrap();
+        writeln!(&mut buffer, "use std::cell::RefCell;").unwrap();
+        writeln!(&mut buffer, "").unwrap();
+        writeln!(&mut buffer, "thread_local! {{").unwrap();
+        writeln!(
+            &mut buffer,
+            "    static Y_SHARED_SCRATCH_F32: RefCell<Box<[f32]>> = RefCell::new(vec![0.0f32; 8192].into_boxed_slice());"
+        ).unwrap();
+        writeln!(&mut buffer, "}}").unwrap();
+        writeln!(&mut buffer, "").unwrap();
+        writeln!(&mut buffer, "fn y_shared_alloc_f32() -> *mut f32 {{").unwrap();
+        writeln!(
+            &mut buffer,
+            "    Y_SHARED_SCRATCH_F32.with(|buf| buf.borrow_mut().as_mut_ptr())"
+        ).unwrap();
+        writeln!(&mut buffer, "}}").unwrap();
+        writeln!(&mut buffer, "").unwrap();
+        writeln!(&mut buffer, "fn y_pipeline_init() {{}}").unwrap();
+        writeln!(&mut buffer, "fn y_pipe_wait<T>(_token: T) {{}}").unwrap();
+        writeln!(&mut buffer, "fn y_barrier_sync() {{}}").unwrap();
         writeln!(&mut buffer, "").unwrap();
 
         Self {
@@ -58,14 +77,14 @@ impl CpuEmitter {
                     "char" => "char".into(),
                     "I32" => "i32".into(),
                     "F32" => "f32".into(),
-                    "F16" => "f16".into(),
+                    "F16" => "f32".into(),
                     _ => name.clone(), // Default fallback
                 }
             }
             Type::Ident(name, _) => name.clone(),
             Type::Generic { base, args, .. } => {
                  if base == "GlobalMemory" { 
-                     "*mut f16".into() 
+                     "*mut f32".into() 
                  } else if base == "Vec" {
                      let mut inner_ty = "()".to_string();
                      let mut alloc = "std::alloc::Global".to_string();
@@ -260,48 +279,63 @@ impl CpuEmitter {
         }
     }
 
+    fn emit_call(&mut self, func: &Expr, args: &[Expr]) -> String {
+        let fname = self.emit_expr(func);
+        let mut arg_strs = Vec::new();
+        for a in args {
+            arg_strs.push(self.emit_expr(a));
+        }
+
+        if fname == "cp_async" {
+            return format!(
+                "std::ptr::copy_nonoverlapping({}, {}, 32)",
+                arg_strs[0],
+                arg_strs[1]
+            );
+        } else if fname == "ldmatrix" {
+            return format!("Y256f32::load_aligned_ptr({} as *const f32)", arg_strs[0]);
+        } else if fname == "mma_sync" {
+            return format!("{}.fmadd({}, {})", arg_strs[0], arg_strs[1], arg_strs[2]);
+        } else if fname == "store" {
+            return format!("{}.store_aligned_ptr({} as *mut f32)", arg_strs[0], arg_strs[1]);
+        }
+
+        format!("{}({})", fname, arg_strs.join(", "))
+    }
+
     fn emit_expr(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::Ident(name, _) => name.clone(),
             Expr::IntLit(val, _) => val.to_string(),
-            Expr::Call { func, args, .. } => {
-                let fname = self.emit_expr(&**func);
-                
-                let mut arg_strs = Vec::new();
-                for a in args {
-                    arg_strs.push(self.emit_expr(a));
-                }
-
-                if fname == "cp_async" {
-                    return format!("std::ptr::copy_nonoverlapping({}, {}, 128)", arg_strs[0], arg_strs[1]);
-                } else if fname == "ldmatrix" {
-                    // Loading into 256-bit AVX
-                    return format!("Y256f32::load_aligned({})", arg_strs[0]);
-                } else if fname == "mma_sync" {
-                    return format!("{}.ma({}, {})", arg_strs[0], arg_strs[1], arg_strs[2]); 
-                } else if fname == "store" {
-                    return format!("{}.store_aligned({})", arg_strs[0], arg_strs[1]);
-                }
-                
-                format!("{}({})", fname, arg_strs.join(", "))
+            Expr::Call { func, args, .. } => self.emit_call(func, args),
+            Expr::GenericCall { func, args, .. } => self.emit_call(func, args),
+            Expr::Index { base, index, .. } => {
+                let base_expr = self.emit_expr(base);
+                let index_expr = self.emit_expr(index);
+                format!("{}.add({} as usize)", base_expr, index_expr)
             }
             Expr::Path { namespace, member, .. } => {
                 if namespace == "Fragment" && member == "zero" {
-                    return "Y256f32::from_scalar(0.0)".into();
+                    return "Y256f32::zero".into();
                 }
                 if namespace == "SharedMemory" && member == "alloc" {
-                    // Host fallback for SharedMemory is just an aligned Vec or scratch buffer!
-                    return "vec![0.0f16; 8192].as_mut_ptr()".into();
+                    return "y_shared_alloc_f32".into();
                 }
                 if namespace == "File" && member == "read" {
                     // Prototype runtime binding for filesystem access!
                     return "std::fs::read_to_string".into();
                 }
+                if namespace == "Pipeline" && member == "init" {
+                    return "y_pipeline_init".into();
+                }
+                if namespace == "barrier" && member == "sync" {
+                    return "y_barrier_sync".into();
+                }
                 "".into()
             }
             Expr::MemberAccess { member, .. } => {
                 if member == "wait" {
-                    return "// Pipe Wait (No-op on CPU synchronous loop)".into();
+                    return "y_pipe_wait".into();
                 }
                 "".into()
             }

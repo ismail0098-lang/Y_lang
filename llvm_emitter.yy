@@ -19,21 +19,27 @@ impl LlvmEmitter {
 
     @unsafe
     fn int_to_str(val: usize) -> String {
-        // A simple int-to-string for our prototype (only handles up to 9999)
         if val == 0 { return String::new("0"); }
-        if val == 1 { return String::new("1"); }
-        if val == 2 { return String::new("2"); }
-        if val == 3 { return String::new("3"); }
-        if val == 4 { return String::new("4"); }
-        if val == 5 { return String::new("5"); }
-        if val == 6 { return String::new("6"); }
-        if val == 7 { return String::new("7"); }
-        if val == 8 { return String::new("8"); }
-        if val == 9 { return String::new("9"); }
+        let mut temp: usize = val;
+        let mut s: String = String::new("");
         
-        // For larger numbers in prototype, we just return a placeholder or implement a real loop if we had modulo
-        // Y-Lang self-hosted doesn't have modulo yet in this snippet, so let's just return a generic
-        return String::new("100");
+        // Extracts digits backwards. 123 becomes "321". 
+        // Perfectly valid for unique LLVM SSA names!
+        while temp > 0 {
+            let digit: usize = temp % 10;
+            if digit == 0 { String::push(&mut s, '0'); }
+            if digit == 1 { String::push(&mut s, '1'); }
+            if digit == 2 { String::push(&mut s, '2'); }
+            if digit == 3 { String::push(&mut s, '3'); }
+            if digit == 4 { String::push(&mut s, '4'); }
+            if digit == 5 { String::push(&mut s, '5'); }
+            if digit == 6 { String::push(&mut s, '6'); }
+            if digit == 7 { String::push(&mut s, '7'); }
+            if digit == 8 { String::push(&mut s, '8'); }
+            if digit == 9 { String::push(&mut s, '9'); }
+            temp = temp / 10;
+        }
+        return s;
     }
 
     @unsafe
@@ -68,6 +74,7 @@ impl LlvmEmitter {
             String::push_str(&mut (*e).buffer, &String::new("i32 %"));
             String::push_str(&mut (*e).buffer, &param.name);
             String::push_str(&mut (*e).buffer, &String::new(".arg"));
+   
             if p + 1 < fdecl.param_count {
                 String::push_str(&mut (*e).buffer, &String::new(", "));
             }
@@ -75,7 +82,6 @@ impl LlvmEmitter {
         }
         
         String::push_str(&mut (*e).buffer, &String::new(") {\nentry:\n"));
-        
         // Alloca for params
         let mut ap: usize = 0;
         while ap < fdecl.param_count {
@@ -104,7 +110,6 @@ impl LlvmEmitter {
     @unsafe
     fn emit_stmt(e: &mut LlvmEmitter, arena: &AstArena, stmt_idx: usize) {
         let stmt: Stmt = Vec::get_Stmt(&(*arena).stmts, stmt_idx);
-        
         if stmt.tag == Stmt_TAG_Let {
             let var_name: String = stmt.data.Let._0;
             let init_idx: usize = stmt.data.Let._2;
@@ -112,7 +117,6 @@ impl LlvmEmitter {
             String::push_str(&mut (*e).buffer, &String::new("  %"));
             String::push_str(&mut (*e).buffer, &var_name);
             String::push_str(&mut (*e).buffer, &String::new(" = alloca i32\n"));
-            
             if init_idx > 0 {
                 let val: String = LlvmEmitter::emit_expr(e, arena, init_idx - 1);
                 String::push_str(&mut (*e).buffer, &String::new("  store i32 "));
@@ -193,9 +197,10 @@ impl LlvmEmitter {
     @unsafe
     fn emit_expr(e: &mut LlvmEmitter, arena: &AstArena, expr_idx: usize) -> String {
         let expr: Expr = Vec::get_Expr(&(*arena).exprs, expr_idx);
-        
         if expr.tag == Expr_TAG_IntLit {
-            return String::new("0");
+            // Using the int_to_str fallback to emit the actual number!
+            let val_str: String = LlvmEmitter::int_to_str(expr.data.IntLit._0);
+            return val_str;
         } else if expr.tag == Expr_TAG_Ident {
             let tmp: String = LlvmEmitter::fresh_tmp(e);
             String::push_str(&mut (*e).buffer, &String::new("  "));
@@ -213,8 +218,21 @@ impl LlvmEmitter {
             
             String::push_str(&mut (*e).buffer, &String::new("  "));
             String::push_str(&mut (*e).buffer, &tmp);
-            // Default to add for prototype
-            String::push_str(&mut (*e).buffer, &String::new(" = add i32 "));
+            
+            let op: BinaryOp = expr.data.BinaryExpr._1;
+            String::push_str(&mut (*e).buffer, &String::new(" = "));
+            
+            if op == BinaryOp::Add { String::push_str(&mut (*e).buffer, &String::new("add i32 ")); }
+            else if op == BinaryOp::Sub { String::push_str(&mut (*e).buffer, &String::new("sub i32 ")); }
+            else if op == BinaryOp::Mul { String::push_str(&mut (*e).buffer, &String::new("mul i32 ")); }
+            else if op == BinaryOp::Div { String::push_str(&mut (*e).buffer, &String::new("sdiv i32 ")); }
+            else if op == BinaryOp::Mod { String::push_str(&mut (*e).buffer, &String::new("srem i32 ")); }
+            else if op == BinaryOp::Eq { String::push_str(&mut (*e).buffer, &String::new("icmp eq i32 ")); }
+            else if op == BinaryOp::NotEq { String::push_str(&mut (*e).buffer, &String::new("icmp ne i32 ")); }
+            else if op == BinaryOp::Lt { String::push_str(&mut (*e).buffer, &String::new("icmp slt i32 ")); }
+            else if op == BinaryOp::Gt { String::push_str(&mut (*e).buffer, &String::new("icmp sgt i32 ")); }
+            else { String::push_str(&mut (*e).buffer, &String::new("add i32 ")); } // Fallback
+            
             String::push_str(&mut (*e).buffer, &l);
             String::push_str(&mut (*e).buffer, &String::new(", "));
             String::push_str(&mut (*e).buffer, &r);

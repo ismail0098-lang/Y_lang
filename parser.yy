@@ -68,7 +68,10 @@ enum Expr {
     BinaryExpr(usize, BinaryOp, usize),
 
     // op operand_idx
-    UnaryExpr(UnaryOp, usize)
+    UnaryExpr(UnaryOp, usize),
+
+    // name, field_start, field_count
+    StructLit(String, usize, usize)
 }
 
 // ── Statements ──────────────────────────────────────────────
@@ -85,6 +88,12 @@ enum Stmt {
 
     // while cond_idx { body_start..body_count }
     While(usize, usize, usize),
+
+    // for loop_var in start_idx..end_idx step step_idx { body_start..body_count }
+    For(String, usize, usize, usize, usize, usize),
+
+    // match scrutinee_idx { arm_start..arm_count }
+    Match(usize, usize, usize),
 
     // target_idx = value_idx;
     Assign(usize, usize),
@@ -114,12 +123,39 @@ struct ParamDecl {
     type_str: String
 }
 
+struct FieldDecl {
+    name: String,
+    type_str: String
+}
+
+struct StructDecl {
+    name: String,
+    field_start: usize,
+    field_count: usize
+}
+
+enum MatchPattern {
+    Ident(String),
+    EnumVariant(String, String), // path, variant
+    Literal(usize), // expr_idx
+    Wildcard
+}
+
+struct MatchArm {
+    pattern: MatchPattern,
+    body_start: usize, // idx into stmts
+    body_count: usize  // length of block
+}
+
 impl Vec {
     fn get_Token(v: &Vec, i: usize) -> Token { let d: Token; return d; }
     fn get_Expr(v: &Vec, i: usize) -> Expr { let d: Expr; return d; }
     fn get_Stmt(v: &Vec, i: usize) -> Stmt { let d: Stmt; return d; }
     fn get_FuncDecl(v: &Vec, i: usize) -> FuncDecl { let d: FuncDecl; return d; }
     fn get_ParamDecl(v: &Vec, i: usize) -> ParamDecl { let d: ParamDecl; return d; }
+    fn get_StructDecl(v: &Vec, i: usize) -> StructDecl { let d: StructDecl; return d; }
+    fn get_FieldDecl(v: &Vec, i: usize) -> FieldDecl { let d: FieldDecl; return d; }
+    fn get_MatchArm(v: &Vec, i: usize) -> MatchArm { let d: MatchArm; return d; }
     fn get_usize(v: &Vec, i: usize) -> usize { return 0; }
 }
 
@@ -132,20 +168,29 @@ struct AstArena {
     stmts: Vec,
     params: Vec,
     funcs: Vec,
+    structs: Vec,
+    fields: Vec,
+    match_arms: Vec,
     // Auxiliary: expression argument lists stored flat
-    arg_indices: Vec
+    arg_indices: Vec,
+    struct_lit_names: Vec,
+    struct_lit_exprs: Vec
 }
 
 impl AstArena {
     @unsafe
     fn new() -> AstArena {
         let arena: AstArena;
-        // sizeof(Expr)  — We use a generous estimate for tagged union size
         arena.exprs = Vec::new(64);
         arena.stmts = Vec::new(64);
         arena.params = Vec::new(32);
         arena.funcs = Vec::new(32);
+        arena.structs = Vec::new(16);
+        arena.fields = Vec::new(64);
+        arena.match_arms = Vec::new(16);
         arena.arg_indices = Vec::new(8);
+        arena.struct_lit_names = Vec::new(16);
+        arena.struct_lit_exprs = Vec::new(16);
         return arena;
     }
 }
@@ -176,6 +221,19 @@ impl Parser {
     fn peek(p: &Parser) -> Token {
         if (*p).pos < (*p).token_count {
             return Vec::get_Token(&(*p).tokens, (*p).pos);
+        }
+        let eof: Token;
+        eof.kind = TokenKind::Eof;
+        eof.line = 0;
+        eof.col = 0;
+        eof.lexeme = String::new("");
+        return eof;
+    }
+
+    @unsafe
+    fn peek_at(p: &Parser, offset: usize) -> Token {
+        if (*p).pos + offset < (*p).token_count {
+            return Vec::get_Token(&(*p).tokens, (*p).pos + offset);
         }
         let eof: Token;
         eof.kind = TokenKind::Eof;
@@ -315,6 +373,53 @@ impl Parser {
                     Vec::push(&mut (*arena).exprs, expr);
                     let idx: usize = Vec::len(&(*arena).exprs);
                     return idx;
+                }
+
+                // Check for Struct Literal
+                let check1: Token = Parser::peek_at(p, 0);
+                if String::eq_cstr(&check1.lexeme, "{") {
+                    let check2: Token = Parser::peek_at(p, 1);
+                    let check3: Token = Parser::peek_at(p, 2);
+                    let mut is_struct: bool = false;
+                    if String::eq_cstr(&check2.lexeme, "}") {
+                        is_struct = true;
+                    } else if String::eq_cstr(&check3.lexeme, ":") {
+                        is_struct = true;
+                    }
+
+                    if is_struct {
+                        Parser::advance(p); // consume '{'
+                        let field_start: usize = Vec::len(&(*arena).struct_lit_exprs);
+                        let mut field_count: usize = 0;
+
+                        let mut parsing_sfields: bool = true;
+                        while parsing_sfields {
+                            let end_check: Token = Parser::peek(p);
+                            if String::eq_cstr(&end_check.lexeme, "}") {
+                                parsing_sfields = false;
+                            } else {
+                                let sf_tok: Token = Parser::advance(p);
+                                let sf_name: String = String::clone(&sf_tok.lexeme);
+                                Parser::expect_token(p, &String::new(":"));
+                                let sf_expr: usize = Parser::parse_expr(p, arena);
+
+                                Vec::push(&mut (*arena).struct_lit_names, sf_name);
+                                Vec::push(&mut (*arena).struct_lit_exprs, sf_expr);
+                                field_count += 1;
+
+                                let comma_check: Token = Parser::peek(p);
+                                if String::eq_cstr(&comma_check.lexeme, ",") {
+                                    Parser::advance(p);
+                                }
+                            }
+                        }
+                        Parser::expect_token(p, &String::new("}"));
+
+                        let expr: Expr = Expr::StructLit(String::clone(&lex), field_start, field_count);
+                        Vec::push(&mut (*arena).exprs, expr);
+                        let idx: usize = Vec::len(&(*arena).exprs);
+                        return idx;
+                    }
                 }
 
                 let expr: Expr = Expr::Ident(String::clone(&lex));
@@ -670,6 +775,223 @@ impl Parser {
             return idx;
         }
 
+        // ── for statement ──
+        if String::eq_cstr(&lex, "for") {
+            Parser::advance(p);
+            let var_tok: Token = Parser::advance(p);
+            let loop_var: String = String::clone(&var_tok.lexeme);
+            Parser::expect_token(p, &String::new("in"));
+            
+            let start_idx: usize = Parser::parse_expr(p, arena);
+            Parser::expect_token(p, &String::new(".."));
+            let end_idx: usize = Parser::parse_expr(p, arena);
+            
+            let mut step_idx: usize = 0;
+            let step_check: Token = Parser::peek(p);
+            if String::eq_cstr(&step_check.lexeme, "step") {
+                Parser::advance(p);
+                step_idx = Parser::parse_expr(p, arena);
+            }
+            
+            Parser::expect_token(p, &String::new("{"));
+            let body_start: usize = Vec::len(&(*arena).stmts);
+            let mut body_count: usize = 0;
+            let mut parsing_body: bool = true;
+           let check: Token = Parser::peek(p);
+                if String::eq_cstr(&check.lexeme, "}") {
+                    parsing_body = false;
+                } else {
+                    Parser::parse_stmt(p, arena);
+                    body_count += 1;
+                }
+            }
+            Parser::expect_token(p, &String::new("}"));
+            
+            let stmt: Stmt = Stmt::For(loop_var, start_idx, end_idx, step_idx, body_start, body_count);
+            Vec::push(&mut (*arena).stmts, stmt);
+            let idx: usize = Vec::len(&(*arena).stmts);
+            return idx;
+        }
+
+        // ── match statement ──
+        if String::eq_cstr(&lex, "match") {
+            Parser::advance(p);
+            let scrutinee_idx: usize = Parser::parse_expr(p, arena);
+            Parser::expect_token(p, &String::new("{"));
+            
+            let arm_start: usize = Vec::len(&(*arena).match_arms);
+            let mut arm_count: usize = 0;
+            let mut parsing_arms: bool = true;
+            while parsing_arms {
+                let check: Token = Parser::peek(p);
+                if String::eq_cstr(&check.lexeme, "}") {
+                    parsing_arms = false;
+                } else {
+                    let pat_tok: Token = Parser::advance(p);
+                    let pat_lex: String = String::clone(&pat_tok.lexeme);
+                    let mut pattern: MatchPattern = MatchPattern::Wildcard;
+                    if String::eq_cstr(&pat_lex, "_") {
+                        pattern = MatchPattern::Wildcard;
+                    } else {
+                        let next_tok: Token = Parser::peek(p);
+                        if String::eq_cstr(&next_tok.lexeme, "::") {
+                            Parser::advance(p);
+                            let variant_tok: Token = Parser::advance(p);
+                            let variant_lex: String = String::clone(&variant_tok.lexeme);
+                            pattern = MatchPattern::EnumVariant(pat_lex, variant_lex);
+                        } else {
+                            pattern = MatchPattern::Ident(pat_lex);
+                        }
+                    }
+                    
+                    Parser::expect_token(p, &String::new("=>"));
+                    // Body expression
+                    let body_idx: usize = Parser::parse_expr(p, arena);
+                    let comma_check: Token = Parser::peek(p);
+                    if String::eq_cstr(&comma_check.lexeme, ",") {
+                        Parser::advance(p);
+                    }
+                    
+                    let arm: MatchArm;
+                    arm.pattern = pattern;
+                    arm.body_start = body_idx;
+                    arm.body_count = 1; 
+                    Vec::push(&mut (*arena).match_arms, arm);
+                    arm_count += 1;
+                }
+            }
+            Parser::expect_token(p, &String::new("}"));
+            let stmt: Stmt = Stmt::Match(scrutinee_idx, arm_start, arm_count);
+            Vec::push(&mut (*arena).stmts, stmt);
+            let idx: usize = Vec::len(&(*arena).stmts);
+            return idx;
+        }
+
+        // ── Expression statement / Assignment ──
+        let expr_idx: usize = Parser::parse_expr(p, arena);
+        
+        // Check for assignment: =
+        let assign_check: Token = Parser::peek(p);
+        if String::eq_cstr(&assign_check.lexeme, "=") {
+            Parser::advance(p);
+            let value_idx: usize = Parser::parse_expr(p, arena);
+            Parser::expect_token(p, &String::new(";"));
+            let stmt: Stmt = Stmt::Assign(expr_idx, value_idx);
+            Vec::push(&mut (*arena).stmts, stmt);
+            let idx: usize = Vec::len(&(*arena).stmts);
+            return idx;
+        }
+
+        // Check for compound assignment: +=, -=, *=, /=, %=
+        if String::eq_cstr(&assign_check.lexeme, "+=") {
+            Parser::advance(p);
+            let val_idx: usize = Parser::parse_expr(p, arena);
+            Parser::expect_token(p, &String::new(";"));
+            let stmt: Stmt = Stmt::CompoundAssign(expr_idx, BinaryOp::Add, val_idx);
+            Vec::push(&mut (*arena).stmts, stmt);
+            let idx: usize = Vec::len(&(*arena).stmts);
+            return idx;
+        }
+        if String::eq_cstr(&assign_check.lexeme, "-=") {
+            Parser::advance(p);
+            let val_idx: usize = Parser::parse_expr(p, arena);
+            Parser::expect_token(p, &String::new(";"));
+            let stmt: Stmt = Stmt::CompoundAssign(expr_idx, BinaryOp::Sub, val_idx);
+            Vec::push(&mut (*arena).stmts, stmt);
+            let idx: usize = Vec::len(&(*arena).stmts);
+            return idx;
+        }
+        if String::eq_cstr(&assign_check.lexeme, "*=") {
+            Parser::advance(p);
+            let val_idx: usize = Parser::parse_expr(p, arena);
+            Parser::expect_token(p, &String::new(";"));
+            let stmt: Stmt = Stmt::CompoundAssign(expr_idx, BinaryOp::Mul, val_idx);
+            Vec::push(&mut (*arena).stmts, stmt);
+            let idx: usize = Vec::len(&(*arena).stmts);
+            return idx;
+        }
+        if String::eq_cstr(&assign_check.lexeme, "/=") {
+            Parser::advance(p);
+            let val_idx: usize = Parser::parse_expr(p, arena);
+            Parser::expect_token(p, &String::new(";"));
+            let stmt: Stmt = Stmt::CompoundAssign(expr_idx, BinaryOp::Div, val_idx);
+            Vec::push(&mut (*arena).stmts, stmt);
+            let idx: usize = Vec::len(&(*arena).stmts);
+            return idx;
+        }
+        if String::eq_cstr(&assign_check.lexeme, "%=") {
+            Parser::advance(p);
+            let val_idx: usize = Parser::parse_expr(p, arena);
+            Parser::expect_token(p, &String::new(";"));
+            let stmt: Stmt = Stmt::CompoundAssign(expr_idx, BinaryOp::Mod, val_idx);
+            Vec::push(&mut (*arena).stmts, stmt);
+            let idx: usize = Vec::len(&(*arena).stmts);
+            return idx;
+        }
+
+        // Default: expression statement
+        Parser::expect_token(p, &String::new(";"));
+        let stmt: Stmt = Stmt::ExprStmt(expr_idx);
+        Vec::push(&mut (*arena).stmts, stmt);
+        let idx: usize = Vec::len(&(*arena).stmts);
+        return idx;
+    }
+            
+            let mut parsing_arms: bool = true;
+            while parsing_arms {
+                let check: Token = Parser::peek(p);
+                if String::eq_cstr(&check.lexeme, "}") {
+                    parsing_arms = false;
+                } else {
+                    let pat_tok: Token = Parser::advance(p);
+                    let pat_lex: String = String::clone(&pat_tok.lexeme);
+                    let mut pattern: MatchPattern = MatchPattern::Wildcard;
+                    
+                    if String::eq_cstr(&pat_lex, "_") {
+                        pattern = MatchPattern::Wildcard;
+                    } else {
+                        // Very simplified pattern parsing for bootstrap:
+                        // Just map it to Ident or Wildcard for now, or Literal
+                        // Need a robust peek_at to distinguish EnumVariant vs Ident
+                        let next_tok: Token = Parser::peek(p);
+                        if String::eq_cstr(&next_tok.lexeme, "::") {
+                            Parser::advance(p);
+                            let variant_tok: Token = Parser::advance(p);
+                            let variant_lex: String = String::clone(&variant_tok.lexeme);
+                            pattern = MatchPattern::EnumVariant(pat_lex, variant_lex);
+                        } else {
+                            // Let's assume it's an Ident
+                            pattern = MatchPattern::Ident(pat_lex);
+                        }
+                    }
+                    
+                    Parser::expect_token(p, &String::new("=>"));
+                    
+                    // Body expression
+                    let body_idx: usize = Parser::parse_expr(p, arena);
+                    
+                    let comma_check: Token = Parser::peek(p);
+                    if String::eq_cstr(&comma_check.lexeme, ",") {
+                        Parser::advance(p);
+                    }
+                    
+                    let arm: MatchArm;
+                    arm.pattern = pattern;
+                    arm.body_start = body_idx;
+                    arm.body_count = 1; // It's an expression so count=1 statement logically, or it just maps directly to expr index.
+                    
+                    Vec::push(&mut (*arena).match_arms, arm);
+                    arm_count += 1;
+                }
+            }
+            Parser::expect_token(p, &String::new("}"));
+            
+            let stmt: Stmt = Stmt::Match(scrutinee_idx, arm_start, arm_count);
+            Vec::push(&mut (*arena).stmts, stmt);
+            let idx: usize = Vec::len(&(*arena).stmts);
+            return idx;
+        }
+
         // ── Expression statement / Assignment ──
         let expr_idx: usize = Parser::parse_expr(p, arena);
 
@@ -848,22 +1170,60 @@ impl Parser {
             return true;
         }
 
-        // struct declaration — skip body for bootstrap
+        // struct declaration
         if String::eq_cstr(&lex, "struct") {
             Parser::advance(p);
-            let _name: Token = Parser::advance(p);
-            // Skip until closing }
+            let name_tok: Token = Parser::advance(p);
+            let s_name: String = String::clone(&name_tok.lexeme);
             Parser::expect_token(p, &String::new("{"));
-            let mut depth: usize = 1;
-            while depth > 0 {
-                let t: Token = Parser::advance(p);
-                if String::eq_cstr(&t.lexeme, "{") {
-                    depth += 1;
-                }
-                if String::eq_cstr(&t.lexeme, "}") {
-                    depth -= 1;
+
+            let field_start: usize = Vec::len(&(*arena).fields);
+            let mut field_count: usize = 0;
+
+            let mut parsing_fields: bool = true;
+            while parsing_fields {
+                let check: Token = Parser::peek(p);
+                if String::eq_cstr(&check.lexeme, "}") {
+                    parsing_fields = false;
+                } else {
+                    let fname_tok: Token = Parser::advance(p);
+                    let fname: String = String::clone(&fname_tok.lexeme);
+                    Parser::expect_token(p, &String::new(":"));
+                    
+                    let mut type_str: String = String::new("");
+                    let mut skipping: bool = true;
+                    while skipping {
+                        let t: Token = Parser::peek(p);
+                        if String::eq_cstr(&t.lexeme, ",") {
+                            skipping = false;
+                        } else if String::eq_cstr(&t.lexeme, "}") {
+                            skipping = false;
+                        } else {
+                            // In a real parser we'd append the type token's lexeme correctly
+                            // but for bootstrap we just skip until , or }
+                            Parser::advance(p);
+                        }
+                    }
+
+                    let field: FieldDecl;
+                    field.name = fname;
+                    field.type_str = type_str;
+                    Vec::push(&mut (*arena).fields, field);
+                    field_count += 1;
+
+                    let comma_check: Token = Parser::peek(p);
+                    if String::eq_cstr(&comma_check.lexeme, ",") {
+                        Parser::advance(p);
+                    }
                 }
             }
+            Parser::expect_token(p, &String::new("}"));
+
+            let sdecl: StructDecl;
+            sdecl.name = s_name;
+            sdecl.field_start = field_start;
+            sdecl.field_count = field_count;
+            Vec::push(&mut (*arena).structs, sdecl);
             return true;
         }
 
@@ -950,9 +1310,7 @@ impl Parser {
         let mut parsing: bool = true;
         while parsing {
             let has_more: bool = Parser::parse_item(p, arena);
-            if has_more {
-                // continue
-            } else {
+            if has_more == false {
                 parsing = false;
             }
         }

@@ -62,6 +62,12 @@ impl Y256f32 {
         unimplemented!("Y256f32 requires x86_64")
     }
 
+    /// Compatibility alias used by generated backend code.
+    #[inline]
+    pub fn from_scalar(val: f32) -> Self {
+        Self::splat(val)
+    }
+
     /// Load 8 f32 values from a 32-byte aligned slice.
     ///
     /// # Panics
@@ -76,6 +82,22 @@ impl Y256f32 {
         #[cfg(target_arch = "x86_64")]
         unsafe {
             Self(_mm256_load_ps(src.as_ptr()))
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        unimplemented!()
+    }
+
+    /// Load 8 f32 values from a 32-byte aligned raw pointer.
+    #[inline]
+    pub fn load_aligned_ptr(src: *const f32) -> Self {
+        assert!(!src.is_null(), "Y256f32::load_aligned_ptr requires a non-null pointer");
+        assert!(
+            src as usize % 32 == 0,
+            "Y256f32::load_aligned_ptr: pointer must be 32-byte aligned"
+        );
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            Self(_mm256_load_ps(src))
         }
         #[cfg(not(target_arch = "x86_64"))]
         unimplemented!()
@@ -102,6 +124,22 @@ impl Y256f32 {
         unsafe {
             _mm256_store_ps(dst.as_mut_ptr(), self.0)
         }
+    }
+
+    /// Store 8 f32 values into a 32-byte aligned raw pointer.
+    #[inline]
+    pub fn store_aligned_ptr(self, dst: *mut f32) {
+        assert!(!dst.is_null(), "Y256f32::store_aligned_ptr requires a non-null pointer");
+        assert!(
+            dst as usize % 32 == 0,
+            "Y256f32::store_aligned_ptr: pointer must be 32-byte aligned"
+        );
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            _mm256_store_ps(dst, self.0)
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        unimplemented!()
     }
 
     /// Store 8 f32 values into an unaligned slice.
@@ -185,6 +223,12 @@ impl Y256f32 {
         }
         #[cfg(not(target_arch = "x86_64"))]
         unimplemented!()
+    }
+
+    /// Compatibility alias used by generated backend code.
+    #[inline]
+    pub fn ma(self, b: Self, c: Self) -> Self {
+        self.fmadd(b, c)
     }
 
     /// Horizontal sum across all 8 lanes.  Returns a scalar f32.

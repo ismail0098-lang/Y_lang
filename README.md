@@ -7,9 +7,22 @@ Y-Lang is a systems programming language and self-hosted compiler infrastructure
 - **Multi-Backend Emitters:**
   - **LLVM IR (`llvm_emitter.rs`):** Direct translation of the Y-Lang AST into SSA-form LLVM IR.
   - **C Backend (`c_emitter.rs`):** Generates C code for broad platform compatibility. (currently a work-in-progress)
-  - **Hardware Targets (`ptx_emitter.rs`, `cpu_emitter.rs`):** Built-in targeting for GPUs (Ada Lovelace, Hopper) and CPU fallbacks.
-- **Data-Oriented Design:** The parser and AST are built with performance and memory safety in mind.
+  - **Dynamic Hardware Requirements:** Expressive hardware constraints using `@require(condition)` to gate code execution based on probed hardware capabilities (SM version, core counts, specialized intrinsics).
+- **Sentient Backend:** Dynamically tunes instruction selection and thermal unrolling based on a real-time hardware profile (`.ysu_hw_profile`).
+- **Data-Oriented Design:** The parser and AST are built with performance and memory safety in mind using arena allocation.
 - **Self-Hosting Objective:** The ultimate goal of the project is to rewrite the Rust-based compiler modules into Y-Lang itself (`.yy` files) to close the compilation loop.
+
+## Dynamic Hardware Requirements
+
+Y-Lang does not use static target flags. Instead, kernels declare their hardware needs using the `@require` attribute. This allows the same source code to target multiple hardware generations while ensuring the backend only executes on compatible silicon.
+
+```ylang
+@require(sm >= 89)          // Require Ada Lovelace or newer for Tensor Core ops
+@require(tensor_cores >= 4) // Require minimum hardware acceleration
+kernel matmul_16x16(...) {
+    // ...
+}
+```
 
 ## Project Structure
 

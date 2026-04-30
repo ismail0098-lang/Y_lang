@@ -33,6 +33,7 @@ pub struct TypeChecker {
     pub linear_tracker: LinearTracker,
     pub errors: Vec<String>,
     pub in_unsafe: bool,
+    allow_transfer_use: usize,
 }
 
 impl TypeChecker {
@@ -42,6 +43,7 @@ impl TypeChecker {
             linear_tracker: LinearTracker::new(),
             errors: Vec::new(),
             in_unsafe: false,
+            allow_transfer_use: 0,
         }
     }
 
@@ -70,6 +72,90 @@ impl TypeChecker {
         None
     }
 
+    fn check_expr_allowing_transfer_use(&mut self, expr: &Expr) -> SemanticType {
+        self.allow_transfer_use += 1;
+        let ty = self.check_expr(expr);
+        self.allow_transfer_use -= 1;
+        ty
+    }
+
+    fn reject_transfer_escape(&mut self, ty: &SemanticType, span: &Span, context: &str) {
+        if *ty == SemanticType::TransferObligation {
+            self.errors.push(format!(
+                "Line {}: Transfer obligations are linear and may only be consumed by `pipe.wait(...)`, not {}.",
+                span.line, context
+            ));
+        }
+    }
+
+    fn root_ident(expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Ident(name, _) => Some(name.clone()),
+            Expr::Index { base, .. } => Self::root_ident(base),
+            Expr::MemberAccess { base, .. } => Self::root_ident(base),
+            _ => None,
+        }
+    }
+
+    fn transfer_destination_from_expr(expr: &Expr) -> Option<String> {
+        if let Expr::Call { func, args, .. } = expr {
+            if let Expr::Ident(fname, _) = &**func {
+                if fname == "cp_async" && args.len() >= 2 {
+                    return Self::root_ident(&args[1]);
+                }
+            }
+        }
+        None
+    }
+
+    fn require_destination_ready(&mut self, expr: &Expr, span: &Span) {
+        if let Some(name) = Self::root_ident(expr) {
+            self.linear_tracker.require_destination_ready(&name, span.clone());
+        }
+    }
+
+    fn check_wait_call(&mut self, base: &Expr, args: &[Expr], span: &Span) -> SemanticType {
+        let base_ty = self.check_expr(base);
+        self.reject_transfer_escape(&base_ty, span, "as the receiver of a method call");
+
+        if args.is_empty() {
+            self.errors.push(format!(
+                "Line {}: `pipe.wait(...)` requires at least one Transfer obligation.",
+                span.line
+            ));
+            return SemanticType::Unknown;
+        }
+
+        for arg in args {
+            let arg_ty = self.check_expr_allowing_transfer_use(arg);
+            if arg_ty != SemanticType::TransferObligation {
+                self.errors.push(format!(
+                    "Line {}: `pipe.wait(...)` expects Transfer obligations as arguments.",
+                    span.line
+                ));
+                continue;
+            }
+
+            if let Expr::Ident(var_name, _) = arg {
+                if !self.linear_tracker.is_tracked_obligation(var_name) {
+                    self.errors.push(format!(
+                        "Line {}: `{}` is not a tracked Transfer obligation in this scope.",
+                        span.line, var_name
+                    ));
+                    continue;
+                }
+                self.linear_tracker.consume_obligation(var_name, span.clone());
+            } else {
+                self.errors.push(format!(
+                    "Line {}: `pipe.wait(...)` requires named Transfer bindings so the obligation can be consumed exactly once.",
+                    span.line
+                ));
+            }
+        }
+
+        SemanticType::Unknown
+    }
+
     // ── AST Traversal ───────────────────────────────────────
 
     pub fn check_program(&mut self, prog: &Program) {
@@ -93,6 +179,12 @@ impl TypeChecker {
         // Register params
         for param in &kernel.params {
             let sty = self.resolve_type(&param.ty);
+            if sty == SemanticType::TransferObligation {
+                self.errors.push(format!(
+                    "Line {}: Kernel parameters cannot have Transfer type. Transfer obligations must be created and discharged within the kernel body.",
+                    param.span.line
+                ));
+            }
             self.insert_var(param.name.clone(), sty);
         }
 
@@ -111,7 +203,23 @@ impl TypeChecker {
 
         for param in &f.params {
             let sty = self.resolve_type(&param.ty);
+            if sty == SemanticType::TransferObligation {
+                self.errors.push(format!(
+                    "Line {}: Function parameters cannot have Transfer type. Linear Transfer obligations cannot cross function boundaries in the bootstrap compiler.",
+                    param.span.line
+                ));
+            }
             self.insert_var(param.name.clone(), sty);
+        }
+
+        if let Some(ret_ty) = &f.ret_ty {
+            let resolved = self.resolve_type(ret_ty);
+            if resolved == SemanticType::TransferObligation {
+                self.errors.push(format!(
+                    "Line {}: Functions cannot return Transfer obligations. They must be consumed by `pipe.wait(...)` in the creating scope.",
+                    f.span.line
+                ));
+            }
         }
 
         self.check_block(&f.body);
@@ -155,7 +263,26 @@ impl TypeChecker {
 
                 // If it's a transfer obligation (`cp_async`), track it linearly.
                 if inferred_type == SemanticType::TransferObligation {
-                    self.linear_tracker.register_obligation(name.clone(), span.clone());
+                    let destination = init
+                        .as_ref()
+                        .and_then(|expr| Self::transfer_destination_from_expr(expr));
+
+                    if init.is_none() {
+                        self.errors.push(format!(
+                            "Line {}: Transfer obligations must be initialized when declared.",
+                            span.line
+                        ));
+                    }
+
+                    if init.is_some() && destination.is_none() {
+                        self.errors.push(format!(
+                            "Line {}: Transfer obligations must originate from `cp_async(...)` so the compiler can track their destination.",
+                            span.line
+                        ));
+                    }
+
+                    self.linear_tracker
+                        .register_obligation(name.clone(), span.clone(), destination);
                 }
             }
             Stmt::TypeAlias { name, ty, span } => {
@@ -189,14 +316,42 @@ impl TypeChecker {
             Stmt::Assign { target, value, span } => {
                 let t1 = self.check_expr(target);
                 let t2 = self.check_expr(value);
+                if t1 == SemanticType::TransferObligation {
+                    self.errors.push(format!(
+                        "Line {}: Transfer bindings cannot be reassigned. Create a new Transfer with `let` and consume it exactly once with `pipe.wait(...)`.",
+                        span.line
+                    ));
+                }
+                if t2 == SemanticType::TransferObligation {
+                    self.errors.push(format!(
+                        "Line {}: Transfer obligations cannot be assigned or moved into another location. Consume them with `pipe.wait(...)`.",
+                        span.line
+                    ));
+                }
                 if t1 != t2 && t1 != SemanticType::Unknown && t2 != SemanticType::Unknown {
                     self.errors.push(format!("Line {}: Invalid assignment, types do not match.", span.line));
                 }
             }
             Stmt::Expr(expr) => {
-                self.check_expr(expr);
+                let ty = self.check_expr(expr);
+                if ty == SemanticType::TransferObligation {
+                    self.errors.push(format!(
+                        "Line {}: Transfer obligations must be bound to a name and later consumed by `pipe.wait(...)`; they cannot be dropped as expression statements.",
+                        expr.span().line
+                    ));
+                }
             }
-            Stmt::Return(_, _) => {} // Fallback for prototype
+            Stmt::Return(val, span) => {
+                if let Some(expr) = val {
+                    let ret_ty = self.check_expr(expr);
+                    if ret_ty == SemanticType::TransferObligation {
+                        self.errors.push(format!(
+                            "Line {}: Returning a Transfer obligation would leak a linear sync proof. Consume it with `pipe.wait(...)` before returning.",
+                            span.line
+                        ));
+                    }
+                }
+            }
             Stmt::Chisel(block, _) => {
                 // Chisel blocks are privileged — type-check their contents normally
                 self.check_block(block);
@@ -215,12 +370,15 @@ impl TypeChecker {
             Stmt::Match { scrutinee, arms, .. } => {
                 self.check_expr(scrutinee);
                 for arm in arms {
-                    self.check_expr(&arm.body);
+                    let arm_ty = self.check_expr(&arm.body);
+                    self.reject_transfer_escape(&arm_ty, &arm.span, "as a match arm result");
                 }
             }
             Stmt::CompoundAssign { target, value, .. } => {
-                self.check_expr(target);
-                self.check_expr(value);
+                let lhs = self.check_expr(target);
+                let rhs = self.check_expr(value);
+                self.reject_transfer_escape(&lhs, &target.span(), "in compound assignment");
+                self.reject_transfer_escape(&rhs, &value.span(), "in compound assignment");
             }
         }
     }
@@ -230,7 +388,14 @@ impl TypeChecker {
         match expr {
             Expr::Ident(name, _) => {
                 if let Some(ty) = self.lookup_var(name) {
-                    ty.clone()
+                    let ty = ty.clone();
+                    if ty == SemanticType::TransferObligation && self.allow_transfer_use == 0 {
+                        self.errors.push(format!(
+                            "Line {}: `{}` is a linear Transfer obligation and may only be used as an argument to `pipe.wait(...)`.",
+                            span.line, name
+                        ));
+                    }
+                    ty
                 } else {
                     // Could be a Type Alias reference (e.g., `smem_A: ATile`)
                     SemanticType::Unknown 
@@ -239,8 +404,17 @@ impl TypeChecker {
             Expr::Call { func, args, .. } => {
                 if let Expr::Ident(fname, _) = &**func {
                     if fname == "cp_async" {
+                        for arg in args {
+                            let arg_ty = self.check_expr(arg);
+                            self.reject_transfer_escape(&arg_ty, &arg.span(), "as an operand to `cp_async`");
+                        }
                         // Creates an obligation
                         return SemanticType::TransferObligation;
+                    }
+                    if fname == "ldmatrix" || fname == "load" {
+                        if let Some(arg) = args.first() {
+                            self.require_destination_ready(arg, &span);
+                        }
                     }
                     if fname == "mma_sync" {
                         self.check_mma_sync(args, &span);
@@ -248,50 +422,107 @@ impl TypeChecker {
                         return SemanticType::Fragment { op: "MMA_m16n8k16".into(), role: "D".into(), dtype: "F32".into() };
                     }
                 }
+                if let Expr::MemberAccess { base, member, .. } = &**func {
+                    if member == "wait" {
+                        return self.check_wait_call(base, args, &span);
+                    }
+                }
                 if let Expr::Path { namespace, member, .. } = &**func {
                     if namespace == "File" && member == "read" {
+                        for arg in args {
+                            let arg_ty = self.check_expr(arg);
+                            self.reject_transfer_escape(&arg_ty, &arg.span(), "as an argument to `File::read`");
+                        }
                         // Prototype read evaluation guarantees String return
                         return SemanticType::Primitive("String".into());
                     }
                     if namespace == "Vec" || namespace == "String" {
+                        for arg in args {
+                            let arg_ty = self.check_expr(arg);
+                            self.reject_transfer_escape(&arg_ty, &arg.span(), "as an argument to a dynamic allocation API");
+                        }
                         if !self.in_unsafe {
                             self.errors.push(format!("Line {}: Dynamic memory operations like {}::{} are mapped to raw void* and require an @unsafe function context.", span.line, namespace, member));
                         }
                         return SemanticType::Unknown;
                     }
                 }
-                if let Expr::MemberAccess { member, .. } = &**func {
-                    if member == "wait" && args.len() > 0 {
-                        if let Expr::Ident(var_name, _) = &args[0] {
-                            self.linear_tracker.consume_obligation(var_name, span.clone());
-                        }
-                    }
+                let func_ty = self.check_expr(func);
+                self.reject_transfer_escape(&func_ty, &func.span(), "as a callable value");
+                for arg in args {
+                    let arg_ty = self.check_expr(arg);
+                    self.reject_transfer_escape(&arg_ty, &arg.span(), "as a function argument");
                 }
                 SemanticType::Unknown
             }
             Expr::MemberAccess { base, member, .. } => {
+                let base_ty = self.check_expr(base);
                 if member == "wait" {
-                    // Check base type (should be pipeline)
-                    // But importantly, mark obligation as consumed!
-                    if let Expr::Call { args, .. } = expr {
-                         // We don't have argument checking natively inside member access in my AST but assuming.
-                         // Normally `pipe.wait(tx)` requires args.
-                    }
-                    // For the sake of the prototype API, assume arguments are handled separately or it's `pipe.wait(tx_A)`
                     SemanticType::Unknown
                 } else {
+                    self.reject_transfer_escape(&base_ty, &base.span(), "as the base of member access");
                     SemanticType::Unknown
                 }
             }
-            Expr::GenericCall { func, args, .. } => {
-                 // E.g., `SharedMemory::alloc<ATile>()`
-                 SemanticType::Unknown
+            Expr::GenericCall { func, generic_args, args, .. } => {
+                if let Expr::Path { namespace, member, .. } = &**func {
+                    if namespace == "SharedMemory" && member == "alloc" {
+                        for arg in args {
+                            let arg_ty = self.check_expr(arg);
+                            self.reject_transfer_escape(&arg_ty, &arg.span(), "as an argument to `SharedMemory::alloc`");
+                        }
+                        if let Some(layout_ty) = generic_args.first() {
+                            return self.resolve_type(layout_ty);
+                        }
+                        return SemanticType::Unknown;
+                    }
+                    if namespace == "Pipeline" && member == "init" {
+                        for arg in args {
+                            let arg_ty = self.check_expr(arg);
+                            self.reject_transfer_escape(&arg_ty, &arg.span(), "as an argument to `Pipeline::init`");
+                        }
+                        return SemanticType::Pipeline;
+                    }
+                }
+
+                let func_ty = self.check_expr(func);
+                self.reject_transfer_escape(&func_ty, &func.span(), "as a generic callable value");
+                for arg in args {
+                    let arg_ty = self.check_expr(arg);
+                    self.reject_transfer_escape(&arg_ty, &arg.span(), "as a generic call argument");
+                }
+                SemanticType::Unknown
             }
             Expr::StructLit { name, fields, .. } => {
                 for (_, expr) in fields {
-                    self.check_expr(expr);
+                    let field_ty = self.check_expr(expr);
+                    self.reject_transfer_escape(&field_ty, &expr.span(), "inside a struct literal");
                 }
                 SemanticType::Primitive(name.clone())
+            }
+            Expr::Index { base, index, .. } => {
+                self.require_destination_ready(base, &span);
+                let base_ty = self.check_expr(base);
+                let index_ty = self.check_expr(index);
+                self.reject_transfer_escape(&base_ty, &base.span(), "as an indexed value");
+                self.reject_transfer_escape(&index_ty, &index.span(), "as an index expression");
+                SemanticType::Unknown
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                let lhs = self.check_expr(left);
+                let rhs = self.check_expr(right);
+                self.reject_transfer_escape(&lhs, &left.span(), "in a binary expression");
+                self.reject_transfer_escape(&rhs, &right.span(), "in a binary expression");
+                SemanticType::Unknown
+            }
+            Expr::UnaryOp { operand, .. } => {
+                let operand_ty = self.check_expr(operand);
+                self.reject_transfer_escape(&operand_ty, &operand.span(), "in a unary expression");
+                SemanticType::Unknown
+            }
+            Expr::BlockExpr(block, _) => {
+                self.check_block(block);
+                SemanticType::Unknown
             }
             _ => SemanticType::Unknown
         }

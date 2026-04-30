@@ -10,7 +10,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use crate::ast::Span;
 
 /// An obligation to synchronize memory before use.
@@ -18,7 +18,9 @@ use crate::ast::Span;
 pub struct Obligation {
     pub name: String,
     pub created_at: Span,
+    pub destination: Option<String>,
     pub consumed: bool,
+    pub barrier_synchronized: bool,
 }
 
 /// The LinearTracker manages lexical scopes and enforces 
@@ -58,7 +60,7 @@ impl LinearTracker {
     }
 
     /// Register a new linear obligation in the current scope.
-    pub fn register_obligation(&mut self, name: String, span: Span) {
+    pub fn register_obligation(&mut self, name: String, span: Span, destination: Option<String>) {
         if let Some(scope) = self.scopes.last_mut() {
             // Shadowing an existing obligation unconsumed is also an error.
             if let Some(prev) = scope.get(&name) {
@@ -72,7 +74,9 @@ impl LinearTracker {
             scope.insert(name.clone(), Obligation {
                 name,
                 created_at: span,
+                destination,
                 consumed: false,
+                barrier_synchronized: false,
             });
         }
     }
@@ -90,6 +94,7 @@ impl LinearTracker {
                     return false;
                 } else {
                     ob.consumed = true;
+                    ob.barrier_synchronized = false;
                     return true;
                 }
             }
@@ -98,6 +103,78 @@ impl LinearTracker {
         // Not a tracked linear transfer (or it was never defined/is just a normal variable)
         // Handled by standard type checking elsewhere.
         true 
+    }
+
+    pub fn is_tracked_obligation(&self, name: &str) -> bool {
+        self.scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.contains_key(name))
+    }
+
+    pub fn synchronize_barrier(&mut self) {
+        for scope in &mut self.scopes {
+            for obligation in scope.values_mut() {
+                if obligation.consumed {
+                    obligation.barrier_synchronized = true;
+                }
+            }
+        }
+    }
+
+    pub fn require_destination_ready(&mut self, destination: &str, use_span: Span) -> bool {
+        let mut pending_wait = Vec::new();
+        let mut pending_barrier = Vec::new();
+
+        for scope in self.scopes.iter().rev() {
+            for obligation in scope.values() {
+                if obligation.destination.as_deref() != Some(destination) {
+                    continue;
+                }
+
+                if !obligation.consumed {
+                    pending_wait.push(obligation.name.clone());
+                } else if !obligation.barrier_synchronized {
+                    pending_barrier.push(obligation.name.clone());
+                }
+            }
+        }
+
+        if pending_wait.is_empty() && pending_barrier.is_empty() {
+            return true;
+        }
+
+        pending_wait.sort();
+        pending_wait.dedup();
+        pending_barrier.sort();
+        pending_barrier.dedup();
+
+        let message = if !pending_wait.is_empty() && !pending_barrier.is_empty() {
+            format!(
+                "Line {}: Linear Type Error: shared destination `{}` cannot be read because Transfer obligation(s) [{}] are still pending and awaited obligation(s) [{}] have not passed `barrier::sync()`. Call `pipe.wait(...)` and then `barrier::sync()` first.",
+                use_span.line,
+                destination,
+                pending_wait.join(", "),
+                pending_barrier.join(", ")
+            )
+        } else if !pending_wait.is_empty() {
+            format!(
+                "Line {}: Linear Type Error: shared destination `{}` cannot be read while Transfer obligation(s) [{}] are still pending. Call `pipe.wait(...)` and then `barrier::sync()` before reading it.",
+                use_span.line,
+                destination,
+                pending_wait.join(", ")
+            )
+        } else {
+            format!(
+                "Line {}: Linear Type Error: shared destination `{}` cannot be read because awaited Transfer obligation(s) [{}] have not passed `barrier::sync()`. Synchronize the pipeline before reading shared memory.",
+                use_span.line,
+                destination,
+                pending_barrier.join(", ")
+            )
+        };
+
+        self.errors.push(message);
+        false
     }
 
     pub fn has_errors(&self) -> bool {

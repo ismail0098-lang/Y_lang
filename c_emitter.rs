@@ -363,7 +363,7 @@ static void yfile_write(const YStr* path_str, const YStr* content) {{
                     _ => format!("{}/*generic*/", base),
                 }
             }
-            Type::Array { element, size, .. } => {
+            Type::Array { element, .. } => {
                 // Arrays are special — handled at declaration site
                 // Return element type; caller adds [N]
                 self.emit_type(element)

@@ -9,3 +9,4 @@ pub mod ptx_emitter;
 pub mod cpu_emitter;
 pub mod c_emitter;
 pub mod llvm_emitter;
+pub mod sentinel;
