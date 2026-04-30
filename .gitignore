@@ -1,4 +1,7 @@
 *.exe
 *.pdb
 *.rlib
+*.obj
+*.o
+target/
 build_check/
