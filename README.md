@@ -1,6 +1,6 @@
-# Y-Lang Compiler
+# Y Compiler
 
-Y-Lang is a systems programming language and self-hosted compiler infrastructure. Initially designed to support the YSU-Engine (a secure OS and GPU kernel engine), Y-Lang is evolving into a full-featured, general-purpose systems language.
+Y is a systems programming language and self-hosted compiler infrastructure. Initially designed to support the YSU-Engine (a secure OS and GPU kernel engine), Y-Lang is evolving into a full-featured, general-purpose systems language.
 
 ## Features
 
