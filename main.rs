@@ -245,10 +245,14 @@ fn main() {
     // Check for --emit-c flag
     let emit_c = args.iter().any(|a| a == "--emit-c" || a == "--target=c");
     let emit_llvm = args.iter().any(|a| a == "--emit-llvm" || a == "--target=llvm");
-    let output_path = args.iter()
+    let mut output_path = args.iter()
         .find(|a| a.starts_with("--output="))
         .map(|a| a.trim_start_matches("--output=").to_string())
         .unwrap_or_else(|| "output.c".to_string());
+
+    if output_path.starts_with('-') {
+        output_path = format!("./{}", output_path);
+    }
 
     println!("\n✅ Compilation Successful!\n");
 
