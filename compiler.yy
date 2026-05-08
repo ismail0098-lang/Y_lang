@@ -20,12 +20,12 @@ impl Vec {
     }
     
     // Pushes an element to the Vec.
-    fn push(v: &mut Vec, elem: &char) {
+    fn push(v: Vec, elem: &char) {
         yvec_push(v, elem);
     }
 
     // Free the memory
-    fn free(v: &mut Vec) {
+    fn free(v: Vec) {
         yvec_free(v);
     }
     
@@ -43,6 +43,7 @@ impl Vec {
 // ── String (Maps to YStr in C backend) ──────────────────────
 
 impl String {
+
     // Length of string
     fn len(s: &String) -> usize {
         return ystr_len(s);
@@ -53,21 +54,21 @@ impl String {
     }
 
     // Appends a character
-    fn push(s: &mut String, c: char) {
+    fn push(s: String, c: char) {
         ystr_push(s, c);
     }
 
     // Appends another string
-    fn push_str(s: &mut String, other: &String) {
+    fn push_str(s: String, other: String) {
         ystr_push_str(s, other);
     }
 
     // Equivalency check
-    fn eq(a: &String, b: &String) -> bool {
+    fn eq(a: String, b: String) -> bool {
         return ystr_eq(a, b);
     }
     
-    fn eq_cstr(a: &String, b: &char) -> bool {
+    fn eq_cstr(a: String, b: ptr) -> bool {
         return ystr_eq_cstr(a, b);
     }
 
@@ -76,7 +77,7 @@ impl String {
         return ystr_char_at(s, i);
     }
 
-    fn free(s: &mut String) {
+    fn free(s: String) {
         ystr_free(s);
     }
 }
@@ -228,6 +229,7 @@ struct Lexer {
 impl Lexer {
     @unsafe
     fn new(source: &String) -> Lexer {
+        yprint_int(999);
         let lx: Lexer;
         let mut input_vec: Vec<char> = Vec::new(1); // char element size is 1 byte in C, wait no sizeof(char)=1, wait we use `char` primitive which C emitter translates to char
         
@@ -236,7 +238,9 @@ impl Lexer {
         
         while i < len {
             let ch: char = String::char_at(source, i);
-            Vec::push(&mut input_vec, ch); // NOTE replaced &ch with ch since it takes char
+            yprint_int(666);
+            Vec::push(input_vec, &ch);
+            yprint_int(555);
             i += 1;
         }
 
@@ -244,6 +248,7 @@ impl Lexer {
         lx.pos = 0;
         lx.line = 1;
         lx.col = 1;
+        yprint_int(777);
         return lx;
     }
 
@@ -255,7 +260,9 @@ impl Lexer {
         if (*lx).pos >= max_len {
             return '\0';
         }
-        return Vec::get_char(&(*lx).input, (*lx).pos);
+        let ch: char = Vec::get_char(&(*lx).input, (*lx).pos);
+        ylexer_log((*lx).pos, ch);
+        return ch;
     }
     
     @unsafe
@@ -273,7 +280,7 @@ impl Lexer {
         if ch == '\0' {
             return ch;
         }
-        
+        ylexer_log((*lx).pos, ch);
         (*lx).pos += 1;
         if ch == '\n' {
             (*lx).line += 1;
@@ -298,28 +305,28 @@ impl Lexer {
 
 impl Lexer {
     @unsafe
-    fn classify_ident(s: &String) -> TokenKind {
-        if String::eq_cstr(s, "enum") { return TokenKind::Enum; }
-        if String::eq_cstr(s, "struct") { return TokenKind::Struct; }
-        if String::eq_cstr(s, "impl") { return TokenKind::Impl; }
-        if String::eq_cstr(s, "fn") { return TokenKind::Fn; }
-        if String::eq_cstr(s, "let") { return TokenKind::Let; }
-        if String::eq_cstr(s, "return") { return TokenKind::Return; }
-        if String::eq_cstr(s, "if") { return TokenKind::If; }
-        if String::eq_cstr(s, "else") { return TokenKind::Else; }
-        if String::eq_cstr(s, "while") { return TokenKind::While; }
-        if String::eq_cstr(s, "true") { return TokenKind::True; }
-        if String::eq_cstr(s, "false") { return TokenKind::False; }
-        if String::eq_cstr(s, "mut") { return TokenKind::Mut; }
+    fn classify_ident(s: String) -> TokenKind {
+        if String::eq(s, "enum") { return TokenKind::Enum; }
+        if String::eq(s, "struct") { return TokenKind::Struct; }
+        if String::eq(s, "impl") { return TokenKind::Impl; }
+        if String::eq(s, "fn") { return TokenKind::Fn; }
+        if String::eq(s, "let") { return TokenKind::Let; }
+        if String::eq(s, "return") { return TokenKind::Return; }
+        if String::eq(s, "if") { return TokenKind::If; }
+        if String::eq(s, "else") { return TokenKind::Else; }
+        if String::eq(s, "while") { return TokenKind::While; }
+        if String::eq(s, "true") { return TokenKind::True; }
+        if String::eq(s, "false") { return TokenKind::False; }
+        if String::eq(s, "mut") { return TokenKind::Mut; }
         
         // Types
-        if String::eq_cstr(s, "String") { return TokenKind::StringTy; }
-        if String::eq_cstr(s, "Vec") { return TokenKind::VecTy; }
-        if String::eq_cstr(s, "char") { return TokenKind::CharTy; }
-        if String::eq_cstr(s, "usize") { return TokenKind::Ident(String::clone(s)); }
-        if String::eq_cstr(s, "I32") { return TokenKind::I32; }
-        if String::eq_cstr(s, "I64") { return TokenKind::I64; }
-        if String::eq_cstr(s, "bool") { return TokenKind::Bool; }
+        if String::eq(s, "String") { return TokenKind::StringTy; }
+        if String::eq(s, "Vec") { return TokenKind::VecTy; }
+        if String::eq(s, "char") { return TokenKind::CharTy; }
+        if String::eq(s, "usize") { return TokenKind::Ident(String::clone(s)); }
+        if String::eq(s, "I32") { return TokenKind::I32; }
+        if String::eq(s, "I64") { return TokenKind::I64; }
+        if String::eq(s, "bool") { return TokenKind::Bool; }
         
         // Ident
         return TokenKind::Ident(String::clone(s));
@@ -327,6 +334,7 @@ impl Lexer {
     
     @unsafe
     fn skip_whitespace(lx: &mut Lexer) {
+        yprint_int(888);
         let mut parsing: bool = true;
         while parsing {
             let ch: char = Lexer::peek(lx);
@@ -341,8 +349,8 @@ impl Lexer {
     @unsafe
     fn scan_ident_or_keyword(lx: &mut Lexer, start_col: usize, first_char: char) -> Token {
         let line: usize = (*lx).line;
-        let mut s: String = String::new("");
-        String::push(&mut s, first_char);
+        let mut s: String = "";
+        String::push(s, first_char);
         
         let mut parsing: bool = true;
         while parsing {
@@ -354,14 +362,14 @@ impl Lexer {
             if ch == '_' { is_alpha = true; }
             
             if is_alpha {
-                String::push(&mut s, ch);
+                String::push(s, ch);
                 Lexer::advance(lx);
             } else {
                 parsing = false;
             }
         }
         
-        let kind: TokenKind = Lexer::classify_ident(&s);
+        let kind: TokenKind = Lexer::classify_ident(s);
         return Token::new(kind, line, start_col, &s);
     }
 }
@@ -370,8 +378,8 @@ impl Lexer {
     @unsafe
     fn scan_number(lx: &mut Lexer, start_col: usize, first_char: char) -> Token {
         let line: usize = (*lx).line;
-        let mut s: String = String::new("");
-        String::push(&mut s, first_char);
+        let mut s: String = "";
+        String::push(s, first_char);
         
         let mut is_float: bool = false;
         let mut parsing: bool = true;
@@ -382,11 +390,11 @@ impl Lexer {
             if ch >= '0' { if ch <= '9' { is_digit = true; } }
             
             if is_digit {
-                String::push(&mut s, ch);
+                String::push(s, ch);
                 Lexer::advance(lx);
             } else if ch == '.' {
                 is_float = true;
-                String::push(&mut s, ch);
+                String::push(s, ch);
                 Lexer::advance(lx);
             } else {
                 parsing = false;
@@ -410,24 +418,24 @@ impl Lexer {
         let ch: char = Lexer::advance(lx);
         
         if ch == '\0' {
-            let empty: String = String::new("");
+            let empty: String = "";
             return Token::new(TokenKind::Eof, line, start_col, &empty);
         }
 
         // Single-char operators
-        if ch == '{' { let x: String = String::new("{"); return Token::new(TokenKind::LBrace, line, start_col, &x); }
-        if ch == '}' { let x: String = String::new("}"); return Token::new(TokenKind::RBrace, line, start_col, &x); }
-        if ch == '(' { let x: String = String::new("("); return Token::new(TokenKind::LParen, line, start_col, &x); }
-        if ch == ')' { let x: String = String::new(")"); return Token::new(TokenKind::RParen, line, start_col, &x); }
-        if ch == ';' { let x: String = String::new(";"); return Token::new(TokenKind::Semicolon, line, start_col, &x); }
-        if ch == ':' { let x: String = String::new(":"); return Token::new(TokenKind::Colon, line, start_col, &x); }
-        if ch == ',' { let x: String = String::new(","); return Token::new(TokenKind::Comma, line, start_col, &x); }
-        if ch == '=' { let x: String = String::new("="); return Token::new(TokenKind::Assign, line, start_col, &x); }
-        if ch == '+' { let x: String = String::new("+"); return Token::new(TokenKind::Plus, line, start_col, &x); }
-        if ch == '*' { let x: String = String::new("*"); return Token::new(TokenKind::Star, line, start_col, &x); }
-        if ch == '&' { let x: String = String::new("&"); return Token::new(TokenKind::Ampersand, line, start_col, &x); }
-        if ch == '<' { let x: String = String::new("<"); return Token::new(TokenKind::Lt, line, start_col, &x); }
-        if ch == '>' { let x: String = String::new(">"); return Token::new(TokenKind::Gt, line, start_col, &x); }
+        if ch == '{' { let x: String = "{"; return Token::new(TokenKind::LBrace, line, start_col, &x); }
+        if ch == '}' { let x: String = "}"; return Token::new(TokenKind::RBrace, line, start_col, &x); }
+        if ch == '(' { let x: String = "("; return Token::new(TokenKind::LParen, line, start_col, &x); }
+        if ch == ')' { let x: String = ")"; return Token::new(TokenKind::RParen, line, start_col, &x); }
+        if ch == ';' { let x: String = ";"; return Token::new(TokenKind::Semicolon, line, start_col, &x); }
+        if ch == ':' { let x: String = ":"; return Token::new(TokenKind::Colon, line, start_col, &x); }
+        if ch == ',' { let x: String = ","; return Token::new(TokenKind::Comma, line, start_col, &x); }
+        if ch == '=' { let x: String = "="; return Token::new(TokenKind::Assign, line, start_col, &x); }
+        if ch == '+' { let x: String = "+"; return Token::new(TokenKind::Plus, line, start_col, &x); }
+        if ch == '*' { let x: String = "*"; return Token::new(TokenKind::Star, line, start_col, &x); }
+        if ch == '&' { let x: String = "&"; return Token::new(TokenKind::Ampersand, line, start_col, &x); }
+        if ch == '<' { let x: String = "<"; return Token::new(TokenKind::Lt, line, start_col, &x); }
+        if ch == '>' { let x: String = ">"; return Token::new(TokenKind::Gt, line, start_col, &x); }
 
         let mut is_alpha: bool = false;
         if ch >= 'a' { if ch <= 'z' { is_alpha = true; } }
@@ -445,7 +453,7 @@ impl Lexer {
             return Lexer::scan_number(lx, start_col, ch);
         }
 
-        let other: String = String::new("?");
+        let other: String = "?";
         return Token::new(TokenKind::Unknown(ch), line, start_col, &other);
     }
 }
@@ -453,7 +461,7 @@ impl Lexer {
 impl Lexer {
     @unsafe
     fn tokenize(lx: &mut Lexer) -> Vec {
-        let mut tokens: Vec = Vec::new(32);
+        let mut tokens: Vec = Vec::new(96);
         let mut parsing: bool = true;
         
         while parsing {
@@ -463,7 +471,7 @@ impl Lexer {
             if len == 0 {
                 parsing = false;
             } else {
-                Vec::push(&mut tokens, tok);
+                Vec::push(tokens, tok);
             }
         }
         
@@ -655,16 +663,16 @@ impl AstArena {
     @unsafe
     fn new() -> AstArena {
         let arena: AstArena;
-        arena.exprs = Vec::new(64);
-        arena.stmts = Vec::new(64);
-        arena.params = Vec::new(32);
-        arena.funcs = Vec::new(32);
-        arena.structs = Vec::new(16);
-        arena.fields = Vec::new(64);
-        arena.match_arms = Vec::new(16);
+        arena.exprs = Vec::new(72);
+        arena.stmts = Vec::new(72);
+        arena.params = Vec::new(16);
+        arena.funcs = Vec::new(64);
+        arena.structs = Vec::new(24);
+        arena.fields = Vec::new(16);
+        arena.match_arms = Vec::new(88);
         arena.arg_indices = Vec::new(8);
-        arena.struct_lit_names = Vec::new(16);
-        arena.struct_lit_exprs = Vec::new(16);
+        arena.struct_lit_names = Vec::new(8);
+        arena.struct_lit_exprs = Vec::new(8);
         return arena;
     }
 }
@@ -700,7 +708,7 @@ impl Parser {
         eof.kind = TokenKind::Eof;
         eof.line = 0;
         eof.col = 0;
-        eof.lexeme = String::new("");
+        eof.lexeme = "";
         return eof;
     }
 
@@ -713,7 +721,7 @@ impl Parser {
         eof.kind = TokenKind::Eof;
         eof.line = 0;
         eof.col = 0;
-        eof.lexeme = String::new("");
+        eof.lexeme = "";
         return eof;
     }
 
@@ -754,7 +762,7 @@ impl Parser {
                 return lex;
             }
         }
-        return String::new("");
+        return "";
     }
 
     @unsafe
@@ -762,7 +770,7 @@ impl Parser {
         // Consume current token and verify its lexeme matches.
         // On mismatch, print error and exit.
         let tok: Token = Parser::advance(p);
-        let matches: bool = String::eq_cstr(&tok.lexeme, expected);
+        let matches: bool = String::eq_cstr(tok.lexeme, expected);
         if matches {
             return;
         }
@@ -798,8 +806,8 @@ impl Parser {
             if is_digit {
                 Parser::advance(p);
                 let expr: Expr = Expr::IntLit(0);
-                Vec::push(&mut (*arena).exprs, expr);
-                let idx: usize = Vec::len(&(*arena).exprs);
+                Vec::push((*arena).exprs, expr);
+                let idx: usize = Vec::len((*arena).exprs);
                 return idx;
             }
 
@@ -807,24 +815,24 @@ impl Parser {
             if ch == '"' {
                 Parser::advance(p);
                 let expr: Expr = Expr::StringLit(String::clone(&lex));
-                Vec::push(&mut (*arena).exprs, expr);
-                let idx: usize = Vec::len(&(*arena).exprs);
+                Vec::push((*arena).exprs, expr);
+                let idx: usize = Vec::len((*arena).exprs);
                 return idx;
             }
 
             // Bool: "true" / "false"
-            if String::eq_cstr(&lex, "true") {
+            if String::eq_cstr(lex, "true") {
                 Parser::advance(p);
                 let expr: Expr = Expr::BoolLit(1);
-                Vec::push(&mut (*arena).exprs, expr);
-                let idx: usize = Vec::len(&(*arena).exprs);
+                Vec::push((*arena).exprs, expr);
+                let idx: usize = Vec::len((*arena).exprs);
                 return idx;
             }
-            if String::eq_cstr(&lex, "false") {
+            if String::eq_cstr(lex, "false") {
                 Parser::advance(p);
                 let expr: Expr = Expr::BoolLit(0);
-                Vec::push(&mut (*arena).exprs, expr);
-                let idx: usize = Vec::len(&(*arena).exprs);
+                Vec::push((*arena).exprs, expr);
+                let idx: usize = Vec::len((*arena).exprs);
                 return idx;
             }
 
@@ -839,109 +847,109 @@ impl Parser {
 
                 // Check for Namespace::member path
                 let next: Token = Parser::peek(p);
-                if String::eq_cstr(&next.lexeme, "::") {
+                if String::eq_cstr(next.lexeme, "::") {
                     Parser::advance(p);
                     let member_tok: Token = Parser::advance(p);
                     let member_lex: String = String::clone(&member_tok.lexeme);
                     let expr: Expr = Expr::Path(String::clone(&lex), member_lex);
-                    Vec::push(&mut (*arena).exprs, expr);
-                    let idx: usize = Vec::len(&(*arena).exprs);
+                    Vec::push((*arena).exprs, expr);
+                    let idx: usize = Vec::len((*arena).exprs);
                     return idx;
                 }
 
                 // Check for Struct Literal
                 let check1: Token = Parser::peek_at(p, 0);
-                if String::eq_cstr(&check1.lexeme, "{") {
+                if String::eq_cstr(check1.lexeme, "{") {
                     let check2: Token = Parser::peek_at(p, 1);
                     let check3: Token = Parser::peek_at(p, 2);
                     let mut is_struct: bool = false;
-                    if String::eq_cstr(&check2.lexeme, "}") {
+                    if String::eq_cstr(check2.lexeme, "}") {
                         is_struct = true;
-                    } else if String::eq_cstr(&check3.lexeme, ":") {
+                    } else if String::eq_cstr(check3.lexeme, ":") {
                         is_struct = true;
                     }
 
                     if is_struct {
                         Parser::advance(p); // consume '{'
-                        let field_start: usize = Vec::len(&(*arena).struct_lit_exprs);
+                        let field_start: usize = Vec::len((*arena).struct_lit_exprs);
                         let mut field_count: usize = 0;
 
                         let mut parsing_sfields: bool = true;
                         while parsing_sfields {
                             let end_check: Token = Parser::peek(p);
-                            if String::eq_cstr(&end_check.lexeme, "}") {
+                            if String::eq_cstr(end_check.lexeme, "}") {
                                 parsing_sfields = false;
                             } else {
                                 let sf_tok: Token = Parser::advance(p);
                                 let sf_name: String = String::clone(&sf_tok.lexeme);
-                                Parser::expect_token(p, &String::new(":"));
+                                Parser::expect_token(p, &":");
                                 let sf_expr: usize = Parser::parse_expr(p, arena);
 
-                                Vec::push(&mut (*arena).struct_lit_names, sf_name);
-                                Vec::push(&mut (*arena).struct_lit_exprs, sf_expr);
+                                Vec::push((*arena).struct_lit_names, sf_name);
+                                Vec::push((*arena).struct_lit_exprs, sf_expr);
                                 field_count += 1;
 
                                 let comma_check: Token = Parser::peek(p);
-                                if String::eq_cstr(&comma_check.lexeme, ",") {
+                                if String::eq_cstr(comma_check.lexeme, ",") {
                                     Parser::advance(p);
                                 }
                             }
                         }
-                        Parser::expect_token(p, &String::new("}"));
+                        Parser::expect_token(p, &"}");
 
                         let expr: Expr = Expr::StructLit(String::clone(&lex), field_start, field_count);
-                        Vec::push(&mut (*arena).exprs, expr);
-                        let idx: usize = Vec::len(&(*arena).exprs);
+                        Vec::push((*arena).exprs, expr);
+                        let idx: usize = Vec::len((*arena).exprs);
                         return idx;
                     }
                 }
 
                 let expr: Expr = Expr::Ident(String::clone(&lex));
-                Vec::push(&mut (*arena).exprs, expr);
-                let idx: usize = Vec::len(&(*arena).exprs);
+                Vec::push((*arena).exprs, expr);
+                let idx: usize = Vec::len((*arena).exprs);
                 return idx;
             }
         }
 
         // Parenthesized expression
-        if String::eq_cstr(&lex, "(") {
+        if String::eq_cstr(lex, "(") {
             Parser::advance(p);
             let inner_idx: usize = Parser::parse_expr(p, arena);
-            Parser::expect_token(p, &String::new(")"));
+            Parser::expect_token(p, &")");
             return inner_idx;
         }
 
         // Unary operators: &, *, -, !
-        if String::eq_cstr(&lex, "&") {
+        if String::eq_cstr(lex, "&") {
             Parser::advance(p);
             let operand_idx: usize = Parser::parse_primary(p, arena);
             let expr: Expr = Expr::UnaryExpr(UnaryOp::Ref, operand_idx);
-            Vec::push(&mut (*arena).exprs, expr);
-            let idx: usize = Vec::len(&(*arena).exprs);
+            Vec::push((*arena).exprs, expr);
+            let idx: usize = Vec::len((*arena).exprs);
             return idx;
         }
-        if String::eq_cstr(&lex, "*") {
+        if String::eq_cstr(lex, "*") {
             Parser::advance(p);
             let operand_idx: usize = Parser::parse_primary(p, arena);
             let expr: Expr = Expr::UnaryExpr(UnaryOp::Deref, operand_idx);
-            Vec::push(&mut (*arena).exprs, expr);
-            let idx: usize = Vec::len(&(*arena).exprs);
+            Vec::push((*arena).exprs, expr);
+            let idx: usize = Vec::len((*arena).exprs);
             return idx;
         }
-        if String::eq_cstr(&lex, "-") {
+        if String::eq_cstr(lex, "-") {
             Parser::advance(p);
             let operand_idx: usize = Parser::parse_primary(p, arena);
             let expr: Expr = Expr::UnaryExpr(UnaryOp::Neg, operand_idx);
-            Vec::push(&mut (*arena).exprs, expr);
-            let idx: usize = Vec::len(&(*arena).exprs);
+            Vec::push((*arena).exprs, expr);
+            let idx: usize = Vec::len((*arena).exprs);
             return idx;
         }
-        if String::eq_cstr(&lex, "!") {
+        if String::eq_cstr(lex, "!") {
             Parser::advance(p);
             let operand_idx: usize = Parser::parse_primary(p, arena);
             let expr: Expr = Expr::UnaryExpr(UnaryOp::Not, operand_idx);
-            Vec::push(&mut (*arena).exprs, expr);
-            let idx: usize = Vec::len(&(*arena).exprs);
+            Vec::push((*arena).exprs, expr);
+            let idx: usize = Vec::len((*arena).exprs);
             return idx;
         }
 
@@ -953,8 +961,8 @@ impl Parser {
         println("");
         // Push a dummy node to prevent crash
         let dummy: Expr = Expr::IntLit(0);
-        Vec::push(&mut (*arena).exprs, dummy);
-        let idx: usize = Vec::len(&(*arena).exprs);
+        Vec::push((*arena).exprs, dummy);
+        let idx: usize = Vec::len((*arena).exprs);
         return idx;
     }
 
@@ -968,52 +976,52 @@ impl Parser {
             let lex: String = String::clone(&tok.lexeme);
 
             // Function call: (
-            if String::eq_cstr(&lex, "(") {
+            if String::eq_cstr(lex, "(") {
                 Parser::advance(p);
-                let args_start: usize = Vec::len(&(*arena).arg_indices);
+                let args_start: usize = Vec::len((*arena).arg_indices);
                 let mut arg_count: usize = 0;
 
                 let mut parsing_args: bool = true;
                 while parsing_args {
                     let check: Token = Parser::peek(p);
-                    if String::eq_cstr(&check.lexeme, ")") {
+                    if String::eq_cstr(check.lexeme, ")") {
                         parsing_args = false;
                     } else {
                         let arg_idx: usize = Parser::parse_expr(p, arena);
-                        Vec::push(&mut (*arena).arg_indices, arg_idx);
+                        Vec::push((*arena).arg_indices, arg_idx);
                         arg_count += 1;
 
                         let comma_check: Token = Parser::peek(p);
-                        if String::eq_cstr(&comma_check.lexeme, ",") {
+                        if String::eq_cstr(comma_check.lexeme, ",") {
                             Parser::advance(p);
                         } else {
                             parsing_args = false;
                         }
                     }
                 }
-                Parser::expect_token(p, &String::new(")"));
+                Parser::expect_token(p, &")");
 
                 let call_expr: Expr = Expr::Call(current, args_start, arg_count);
-                Vec::push(&mut (*arena).exprs, call_expr);
-                current = Vec::len(&(*arena).exprs);
+                Vec::push((*arena).exprs, call_expr);
+                current = Vec::len((*arena).exprs);
             }
             // Member access: .
-            else if String::eq_cstr(&lex, ".") {
+            else if String::eq_cstr(lex, ".") {
                 Parser::advance(p);
                 let member_tok: Token = Parser::advance(p);
                 let member_name: String = String::clone(&member_tok.lexeme);
                 let acc_expr: Expr = Expr::MemberAccess(current, member_name);
-                Vec::push(&mut (*arena).exprs, acc_expr);
-                current = Vec::len(&(*arena).exprs);
+                Vec::push((*arena).exprs, acc_expr);
+                current = Vec::len((*arena).exprs);
             }
             // Indexing: [
-            else if String::eq_cstr(&lex, "[") {
+            else if String::eq_cstr(lex, "[") {
                 Parser::advance(p);
                 let index_idx: usize = Parser::parse_expr(p, arena);
-                Parser::expect_token(p, &String::new("]"));
+                Parser::expect_token(p, &"]");
                 let idx_expr: Expr = Expr::Index(current, index_idx);
-                Vec::push(&mut (*arena).exprs, idx_expr);
-                current = Vec::len(&(*arena).exprs);
+                Vec::push((*arena).exprs, idx_expr);
+                current = Vec::len((*arena).exprs);
             }
             else {
                 running = false;
@@ -1088,8 +1096,8 @@ impl Parser {
                 let rhs: usize = Parser::parse_expr_bp(p, arena, prec + 1);
 
                 let bin_expr: Expr = Expr::BinaryExpr(lhs, op, rhs);
-                Vec::push(&mut (*arena).exprs, bin_expr);
-                lhs = Vec::len(&(*arena).exprs);
+                Vec::push((*arena).exprs, bin_expr);
+                lhs = Vec::len((*arena).exprs);
 
                 // Try postfix on the new combined expression
                 lhs = Parser::parse_postfix(p, arena, lhs);
@@ -1113,11 +1121,11 @@ impl Parser {
         let lex: String = String::clone(&tok.lexeme);
 
         // ── let statement ──
-        if String::eq_cstr(&lex, "let") {
+        if String::eq_cstr(lex, "let") {
             Parser::advance(p);
             // optional: mut
             let mut_check: Token = Parser::peek(p);
-            if String::eq_cstr(&mut_check.lexeme, "mut") {
+            if String::eq_cstr(mut_check.lexeme, "mut") {
                 Parser::advance(p);
             }
             // variable name
@@ -1127,15 +1135,15 @@ impl Parser {
             // optional type annotation
             let mut type_idx: usize = 0;
             let colon_check: Token = Parser::peek(p);
-            if String::eq_cstr(&colon_check.lexeme, ":") {
+            if String::eq_cstr(colon_check.lexeme, ":") {
                 Parser::advance(p);
                 // For bootstrap, skip type tokens until = or ;
                 let mut skipping_type: bool = true;
                 while skipping_type {
                     let t: Token = Parser::peek(p);
-                    if String::eq_cstr(&t.lexeme, "=") {
+                    if String::eq_cstr(t.lexeme, "=") {
                         skipping_type = false;
-                    } else if String::eq_cstr(&t.lexeme, ";") {
+                    } else if String::eq_cstr(t.lexeme, ";") {
                         skipping_type = false;
                     } else {
                         Parser::advance(p);
@@ -1146,175 +1154,175 @@ impl Parser {
             // optional initializer
             let mut init_idx: usize = 0;
             let eq_check: Token = Parser::peek(p);
-            if String::eq_cstr(&eq_check.lexeme, "=") {
+            if String::eq_cstr(eq_check.lexeme, "=") {
                 Parser::advance(p);
                 init_idx = Parser::parse_expr(p, arena);
             }
 
-            Parser::expect_token(p, &String::new(";"));
+            Parser::expect_token(p, &";");
             let stmt: Stmt = Stmt::Let(var_name, type_idx, init_idx);
-            Vec::push(&mut (*arena).stmts, stmt);
-            let idx: usize = Vec::len(&(*arena).stmts);
+            Vec::push((*arena).stmts, stmt);
+            let idx: usize = Vec::len((*arena).stmts);
             return idx;
         }
 
         // ── return statement ──
-        if String::eq_cstr(&lex, "return") {
+        if String::eq_cstr(lex, "return") {
             Parser::advance(p);
             let mut ret_idx: usize = 0;
             let semi_check: Token = Parser::peek(p);
-            if String::eq_cstr(&semi_check.lexeme, ";") {
+            if String::eq_cstr(semi_check.lexeme, ";") {
                 // bare return
             } else {
                 ret_idx = Parser::parse_expr(p, arena);
             }
-            Parser::expect_token(p, &String::new(";"));
+            Parser::expect_token(p, &";");
             let stmt: Stmt = Stmt::Return(ret_idx);
-            Vec::push(&mut (*arena).stmts, stmt);
-            let idx: usize = Vec::len(&(*arena).stmts);
+            Vec::push((*arena).stmts, stmt);
+            let idx: usize = Vec::len((*arena).stmts);
             return idx;
         }
 
         // ── if statement ──
-        if String::eq_cstr(&lex, "if") {
+        if String::eq_cstr(lex, "if") {
             Parser::advance(p);
             let cond_idx: usize = Parser::parse_expr(p, arena);
 
             // Parse then block
-            Parser::expect_token(p, &String::new("{"));
-            let then_start: usize = Vec::len(&(*arena).stmts);
+            Parser::expect_token(p, &"{");
+            let then_start: usize = Vec::len((*arena).stmts);
             let mut then_count: usize = 0;
             let mut parsing_then: bool = true;
             while parsing_then {
                 let check: Token = Parser::peek(p);
-                if String::eq_cstr(&check.lexeme, "}") {
+                if String::eq_cstr(check.lexeme, "}") {
                     parsing_then = false;
                 } else {
                     Parser::parse_stmt(p, arena);
                     then_count += 1;
                 }
             }
-            Parser::expect_token(p, &String::new("}"));
+            Parser::expect_token(p, &"}");
 
             // Optional else block
             let mut else_start: usize = 0;
             let mut else_count: usize = 0;
             let else_check: Token = Parser::peek(p);
-            if String::eq_cstr(&else_check.lexeme, "else") {
+            if String::eq_cstr(else_check.lexeme, "else") {
                 Parser::advance(p);
-                Parser::expect_token(p, &String::new("{"));
-                else_start = Vec::len(&(*arena).stmts);
+                Parser::expect_token(p, &"{");
+                else_start = Vec::len((*arena).stmts);
                 let mut parsing_else: bool = true;
                 while parsing_else {
                     let check2: Token = Parser::peek(p);
-                    if String::eq_cstr(&check2.lexeme, "}") {
+                    if String::eq_cstr(check2.lexeme, "}") {
                         parsing_else = false;
                     } else {
                         Parser::parse_stmt(p, arena);
                         else_count += 1;
                     }
                 }
-                Parser::expect_token(p, &String::new("}"));
+                Parser::expect_token(p, &"}");
             }
 
             let stmt: Stmt = Stmt::If(cond_idx, then_start, then_count, else_start, else_count);
-            Vec::push(&mut (*arena).stmts, stmt);
-            let idx: usize = Vec::len(&(*arena).stmts);
+            Vec::push((*arena).stmts, stmt);
+            let idx: usize = Vec::len((*arena).stmts);
             return idx;
         }
 
         // ── while statement ──
-        if String::eq_cstr(&lex, "while") {
+        if String::eq_cstr(lex, "while") {
             Parser::advance(p);
             let cond_idx: usize = Parser::parse_expr(p, arena);
-            Parser::expect_token(p, &String::new("{"));
+            Parser::expect_token(p, &"{");
 
-            let body_start: usize = Vec::len(&(*arena).stmts);
+            let body_start: usize = Vec::len((*arena).stmts);
             let mut body_count: usize = 0;
             let mut parsing_body: bool = true;
             while parsing_body {
                 let check: Token = Parser::peek(p);
-                if String::eq_cstr(&check.lexeme, "}") {
+                if String::eq_cstr(check.lexeme, "}") {
                     parsing_body = false;
                 } else {
                     Parser::parse_stmt(p, arena);
                     body_count += 1;
                 }
             }
-            Parser::expect_token(p, &String::new("}"));
+            Parser::expect_token(p, &"}");
 
             let stmt: Stmt = Stmt::While(cond_idx, body_start, body_count);
-            Vec::push(&mut (*arena).stmts, stmt);
-            let idx: usize = Vec::len(&(*arena).stmts);
+            Vec::push((*arena).stmts, stmt);
+            let idx: usize = Vec::len((*arena).stmts);
             return idx;
         }
 
         // ── for statement ──
-        if String::eq_cstr(&lex, "for") {
+        if String::eq_cstr(lex, "for") {
             Parser::advance(p);
             let var_tok: Token = Parser::advance(p);
             let loop_var: String = String::clone(&var_tok.lexeme);
-            Parser::expect_token(p, &String::new("in"));
+            Parser::expect_token(p, &"in");
             
             let start_idx: usize = Parser::parse_expr(p, arena);
-            Parser::expect_token(p, &String::new(".."));
+            Parser::expect_token(p, &"..");
             let end_idx: usize = Parser::parse_expr(p, arena);
             
             let mut step_idx: usize = 0;
             let step_check: Token = Parser::peek(p);
-            if String::eq_cstr(&step_check.lexeme, "step") {
+            if String::eq_cstr(step_check.lexeme, "step") {
                 Parser::advance(p);
                 step_idx = Parser::parse_expr(p, arena);
             }
             
-            Parser::expect_token(p, &String::new("{"));
-            let body_start: usize = Vec::len(&(*arena).stmts);
+            Parser::expect_token(p, &"{");
+            let body_start: usize = Vec::len((*arena).stmts);
             let mut body_count: usize = 0;
             let mut parsing_body: bool = true;
             while parsing_body {
                 let check: Token = Parser::peek(p);
-                if String::eq_cstr(&check.lexeme, "}") {
+                if String::eq_cstr(check.lexeme, "}") {
                     parsing_body = false;
                 } else {
                     Parser::parse_stmt(p, arena);
                     body_count += 1;
                 }
             }
-            Parser::expect_token(p, &String::new("}"));
+            Parser::expect_token(p, &"}");
             
             let stmt: Stmt = Stmt::For(loop_var, start_idx, end_idx, step_idx, body_start, body_count);
-            Vec::push(&mut (*arena).stmts, stmt);
-            let idx: usize = Vec::len(&(*arena).stmts);
+            Vec::push((*arena).stmts, stmt);
+            let idx: usize = Vec::len((*arena).stmts);
             return idx;
         }
 
         // ── match statement ──
-        if String::eq_cstr(&lex, "match") {
+        if String::eq_cstr(lex, "match") {
             Parser::advance(p);
             let scrutinee_idx: usize = Parser::parse_expr(p, arena);
-            Parser::expect_token(p, &String::new("{"));
+            Parser::expect_token(p, &"{");
             
-            let arm_start: usize = Vec::len(&(*arena).match_arms);
+            let arm_start: usize = Vec::len((*arena).match_arms);
             let mut arm_count: usize = 0;
             
             let mut parsing_arms: bool = true;
             while parsing_arms {
                 let check: Token = Parser::peek(p);
-                if String::eq_cstr(&check.lexeme, "}") {
+                if String::eq_cstr(check.lexeme, "}") {
                     parsing_arms = false;
                 } else {
                     let pat_tok: Token = Parser::advance(p);
                     let pat_lex: String = String::clone(&pat_tok.lexeme);
                     let mut pattern: MatchPattern = MatchPattern::Wildcard;
                     
-                    if String::eq_cstr(&pat_lex, "_") {
+                    if String::eq_cstr(pat_lex, "_") {
                         pattern = MatchPattern::Wildcard;
                     } else {
                         // Very simplified pattern parsing for bootstrap:
                         // Just map it to Ident or Wildcard for now, or Literal
                         // Need a robust peek_at to distinguish EnumVariant vs Ident
                         let next_tok: Token = Parser::peek(p);
-                        if String::eq_cstr(&next_tok.lexeme, "::") {
+                        if String::eq_cstr(next_tok.lexeme, "::") {
                             Parser::advance(p);
                             let variant_tok: Token = Parser::advance(p);
                             let variant_lex: String = String::clone(&variant_tok.lexeme);
@@ -1325,13 +1333,13 @@ impl Parser {
                         }
                     }
                     
-                    Parser::expect_token(p, &String::new("=>"));
+                    Parser::expect_token(p, &"=>");
                     
                     // Body expression
                     let body_idx: usize = Parser::parse_expr(p, arena);
                     
                     let comma_check: Token = Parser::peek(p);
-                    if String::eq_cstr(&comma_check.lexeme, ",") {
+                    if String::eq_cstr(comma_check.lexeme, ",") {
                         Parser::advance(p);
                     }
                     
@@ -1340,15 +1348,15 @@ impl Parser {
                     arm.body_start = body_idx;
                     arm.body_count = 1; // It's an expression so count=1 statement logically, or it just maps directly to expr index.
                     
-                    Vec::push(&mut (*arena).match_arms, arm);
+                    Vec::push((*arena).match_arms, arm);
                     arm_count += 1;
                 }
             }
-            Parser::expect_token(p, &String::new("}"));
+            Parser::expect_token(p, &"}");
             
             let stmt: Stmt = Stmt::Match(scrutinee_idx, arm_start, arm_count);
-            Vec::push(&mut (*arena).stmts, stmt);
-            let idx: usize = Vec::len(&(*arena).stmts);
+            Vec::push((*arena).stmts, stmt);
+            let idx: usize = Vec::len((*arena).stmts);
             return idx;
         }
 
@@ -1357,41 +1365,41 @@ impl Parser {
 
         // Check for assignment: =
         let assign_check: Token = Parser::peek(p);
-        if String::eq_cstr(&assign_check.lexeme, "=") {
+        if String::eq_cstr(assign_check.lexeme, "=") {
             Parser::advance(p);
             let value_idx: usize = Parser::parse_expr(p, arena);
-            Parser::expect_token(p, &String::new(";"));
+            Parser::expect_token(p, &";");
             let stmt: Stmt = Stmt::Assign(expr_idx, value_idx);
-            Vec::push(&mut (*arena).stmts, stmt);
-            let idx: usize = Vec::len(&(*arena).stmts);
+            Vec::push((*arena).stmts, stmt);
+            let idx: usize = Vec::len((*arena).stmts);
             return idx;
         }
 
         // Check for compound assignment: +=, -=, *=, /=
-        if String::eq_cstr(&assign_check.lexeme, "+=") {
+        if String::eq_cstr(assign_check.lexeme, "+=") {
             Parser::advance(p);
             let val_idx: usize = Parser::parse_expr(p, arena);
-            Parser::expect_token(p, &String::new(";"));
+            Parser::expect_token(p, &";");
             let stmt: Stmt = Stmt::CompoundAssign(expr_idx, BinaryOp::Add, val_idx);
-            Vec::push(&mut (*arena).stmts, stmt);
-            let idx: usize = Vec::len(&(*arena).stmts);
+            Vec::push((*arena).stmts, stmt);
+            let idx: usize = Vec::len((*arena).stmts);
             return idx;
         }
-        if String::eq_cstr(&assign_check.lexeme, "-=") {
+        if String::eq_cstr(assign_check.lexeme, "-=") {
             Parser::advance(p);
             let val_idx: usize = Parser::parse_expr(p, arena);
-            Parser::expect_token(p, &String::new(";"));
+            Parser::expect_token(p, &";");
             let stmt: Stmt = Stmt::CompoundAssign(expr_idx, BinaryOp::Sub, val_idx);
-            Vec::push(&mut (*arena).stmts, stmt);
-            let idx: usize = Vec::len(&(*arena).stmts);
+            Vec::push((*arena).stmts, stmt);
+            let idx: usize = Vec::len((*arena).stmts);
             return idx;
         }
 
         // Default: expression statement
-        Parser::expect_token(p, &String::new(";"));
+        Parser::expect_token(p, &";");
         let stmt: Stmt = Stmt::ExprStmt(expr_idx);
-        Vec::push(&mut (*arena).stmts, stmt);
-        let idx: usize = Vec::len(&(*arena).stmts);
+        Vec::push((*arena).stmts, stmt);
+        let idx: usize = Vec::len((*arena).stmts);
         return idx;
     }
 }
@@ -1406,33 +1414,33 @@ impl Parser {
         let line: usize = name_tok.line;
         let col: usize = name_tok.col;
 
-        Parser::expect_token(p, &String::new("("));
-        let param_start: usize = Vec::len(&(*arena).params);
+        Parser::expect_token(p, &"(");
+        let param_start: usize = Vec::len((*arena).params);
         let mut param_count: usize = 0;
 
         // Parse parameters
         let mut parsing_params: bool = true;
         while parsing_params {
             let check: Token = Parser::peek(p);
-            if String::eq_cstr(&check.lexeme, ")") {
+            if String::eq_cstr(check.lexeme, ")") {
                 parsing_params = false;
             } else {
                 let pname_tok: Token = Parser::advance(p);
                 let pname: String = String::clone(&pname_tok.lexeme);
-                Parser::expect_token(p, &String::new(":"));
+                Parser::expect_token(p, &":");
 
                 // Skip type tokens until , or )
-                let mut type_str: String = String::new("");
+                let mut type_str: String = "";
                 let mut skipping: bool = true;
                 while skipping {
                     let t: Token = Parser::peek(p);
-                    if String::eq_cstr(&t.lexeme, ",") {
+                    if String::eq_cstr(t.lexeme, ",") {
                         skipping = false;
-                    } else if String::eq_cstr(&t.lexeme, ")") {
+                    } else if String::eq_cstr(t.lexeme, ")") {
                         skipping = false;
                     } else {
                         let tlex: String = String::clone(&t.lexeme);
-                        String::push(&mut type_str, ' ');
+                        String::push(type_str, ' ');
                         // Append type token to type_str for debug
                         Parser::advance(p);
                     }
@@ -1441,26 +1449,26 @@ impl Parser {
                 let param: ParamDecl;
                 param.name = pname;
                 param.type_str = type_str;
-                Vec::push(&mut (*arena).params, param);
+                Vec::push((*arena).params, param);
                 param_count += 1;
 
                 let comma_check: Token = Parser::peek(p);
-                if String::eq_cstr(&comma_check.lexeme, ",") {
+                if String::eq_cstr(comma_check.lexeme, ",") {
                     Parser::advance(p);
                 }
             }
         }
-        Parser::expect_token(p, &String::new(")"));
+        Parser::expect_token(p, &")");
 
         // Optional return type: -> Type
         let arrow_check: Token = Parser::peek(p);
-        if String::eq_cstr(&arrow_check.lexeme, "->") {
+        if String::eq_cstr(arrow_check.lexeme, "->") {
             Parser::advance(p);
             // Skip return type tokens until {
             let mut skip_ret: bool = true;
             while skip_ret {
                 let t: Token = Parser::peek(p);
-                if String::eq_cstr(&t.lexeme, "{") {
+                if String::eq_cstr(t.lexeme, "{") {
                     skip_ret = false;
                 } else {
                     Parser::advance(p);
@@ -1469,20 +1477,20 @@ impl Parser {
         }
 
         // Parse body block
-        Parser::expect_token(p, &String::new("{"));
-        let body_start: usize = Vec::len(&(*arena).stmts);
+        Parser::expect_token(p, &"{");
+        let body_start: usize = Vec::len((*arena).stmts);
         let mut body_count: usize = 0;
         let mut parsing_body: bool = true;
         while parsing_body {
             let check: Token = Parser::peek(p);
-            if String::eq_cstr(&check.lexeme, "}") {
+            if String::eq_cstr(check.lexeme, "}") {
                 parsing_body = false;
             } else {
                 Parser::parse_stmt(p, arena);
                 body_count += 1;
             }
         }
-        Parser::expect_token(p, &String::new("}"));
+        Parser::expect_token(p, &"}");
 
         let fdecl: FuncDecl;
         fdecl.name = fn_name;
@@ -1493,8 +1501,8 @@ impl Parser {
         fdecl.body_count = body_count;
         fdecl.line = line;
         fdecl.col = col;
-        Vec::push(&mut (*arena).funcs, fdecl);
-        let idx: usize = Vec::len(&(*arena).funcs);
+        Vec::push((*arena).funcs, fdecl);
+        let idx: usize = Vec::len((*arena).funcs);
         return idx;
     }
 }
@@ -1508,55 +1516,55 @@ impl Parser {
         let lex: String = String::clone(&tok.lexeme);
 
         // fn declaration
-        if String::eq_cstr(&lex, "fn") {
+        if String::eq_cstr(lex, "fn") {
             Parser::advance(p);
             Parser::parse_func_decl(p, arena, 1);
             return true;
         }
 
         // @safe fn
-        if String::eq_cstr(&lex, "@safe") {
+        if String::eq_cstr(lex, "@safe") {
             Parser::advance(p);
-            Parser::expect_token(p, &String::new("fn"));
+            Parser::expect_token(p, &"fn");
             Parser::parse_func_decl(p, arena, 1);
             return true;
         }
 
         // @unsafe fn
-        if String::eq_cstr(&lex, "@unsafe") {
+        if String::eq_cstr(lex, "@unsafe") {
             Parser::advance(p);
-            Parser::expect_token(p, &String::new("fn"));
+            Parser::expect_token(p, &"fn");
             Parser::parse_func_decl(p, arena, 0);
             return true;
         }
 
         // struct declaration
-        if String::eq_cstr(&lex, "struct") {
+        if String::eq_cstr(lex, "struct") {
             Parser::advance(p);
             let name_tok: Token = Parser::advance(p);
             let s_name: String = String::clone(&name_tok.lexeme);
-            Parser::expect_token(p, &String::new("{"));
+            Parser::expect_token(p, &"{");
 
-            let field_start: usize = Vec::len(&(*arena).fields);
+            let field_start: usize = Vec::len((*arena).fields);
             let mut field_count: usize = 0;
 
             let mut parsing_fields: bool = true;
             while parsing_fields {
                 let check: Token = Parser::peek(p);
-                if String::eq_cstr(&check.lexeme, "}") {
+                if String::eq_cstr(check.lexeme, "}") {
                     parsing_fields = false;
                 } else {
                     let fname_tok: Token = Parser::advance(p);
                     let fname: String = String::clone(&fname_tok.lexeme);
-                    Parser::expect_token(p, &String::new(":"));
+                    Parser::expect_token(p, &":");
                     
-                    let mut type_str: String = String::new("");
+                    let mut type_str: String = "";
                     let mut skipping: bool = true;
                     while skipping {
                         let t: Token = Parser::peek(p);
-                        if String::eq_cstr(&t.lexeme, ",") {
+                        if String::eq_cstr(t.lexeme, ",") {
                             skipping = false;
-                        } else if String::eq_cstr(&t.lexeme, "}") {
+                        } else if String::eq_cstr(t.lexeme, "}") {
                             skipping = false;
                         } else {
                             // In a real parser we'd append the type token's lexeme correctly
@@ -1568,37 +1576,37 @@ impl Parser {
                     let field: FieldDecl;
                     field.name = fname;
                     field.type_str = type_str;
-                    Vec::push(&mut (*arena).fields, field);
+                    Vec::push((*arena).fields, field);
                     field_count += 1;
 
                     let comma_check: Token = Parser::peek(p);
-                    if String::eq_cstr(&comma_check.lexeme, ",") {
+                    if String::eq_cstr(comma_check.lexeme, ",") {
                         Parser::advance(p);
                     }
                 }
             }
-            Parser::expect_token(p, &String::new("}"));
+            Parser::expect_token(p, &"}");
 
             let sdecl: StructDecl;
             sdecl.name = s_name;
             sdecl.field_start = field_start;
             sdecl.field_count = field_count;
-            Vec::push(&mut (*arena).structs, sdecl);
+            Vec::push((*arena).structs, sdecl);
             return true;
         }
 
         // enum declaration — skip body for bootstrap
-        if String::eq_cstr(&lex, "enum") {
+        if String::eq_cstr(lex, "enum") {
             Parser::advance(p);
             let _name: Token = Parser::advance(p);
-            Parser::expect_token(p, &String::new("{"));
+            Parser::expect_token(p, &"{");
             let mut depth: usize = 1;
             while depth > 0 {
                 let t: Token = Parser::advance(p);
-                if String::eq_cstr(&t.lexeme, "{") {
+                if String::eq_cstr(t.lexeme, "{") {
                     depth += 1;
                 }
-                if String::eq_cstr(&t.lexeme, "}") {
+                if String::eq_cstr(t.lexeme, "}") {
                     depth -= 1;
                 }
             }
@@ -1606,46 +1614,46 @@ impl Parser {
         }
 
         // impl block
-        if String::eq_cstr(&lex, "impl") {
+        if String::eq_cstr(lex, "impl") {
             Parser::advance(p);
             let _type_name: Token = Parser::advance(p);
-            Parser::expect_token(p, &String::new("{"));
+            Parser::expect_token(p, &"{");
 
             let mut parsing_impl: bool = true;
             while parsing_impl {
                 let check: Token = Parser::peek(p);
-                if String::eq_cstr(&check.lexeme, "}") {
+                if String::eq_cstr(check.lexeme, "}") {
                     parsing_impl = false;
                 } else {
                     // Check for @unsafe/@safe before fn
                     let mut method_safe: I32 = 1;
-                    if String::eq_cstr(&check.lexeme, "@unsafe") {
+                    if String::eq_cstr(check.lexeme, "@unsafe") {
                         Parser::advance(p);
                         method_safe = 0;
-                    } else if String::eq_cstr(&check.lexeme, "@safe") {
+                    } else if String::eq_cstr(check.lexeme, "@safe") {
                         Parser::advance(p);
                     }
                     // optional pub
                     let pub_check: Token = Parser::peek(p);
-                    if String::eq_cstr(&pub_check.lexeme, "pub") {
+                    if String::eq_cstr(pub_check.lexeme, "pub") {
                         Parser::advance(p);
                     }
-                    Parser::expect_token(p, &String::new("fn"));
+                    Parser::expect_token(p, &"fn");
                     Parser::parse_func_decl(p, arena, method_safe);
                 }
             }
-            Parser::expect_token(p, &String::new("}"));
+            Parser::expect_token(p, &"}");
             return true;
         }
 
         // import declaration — skip for bootstrap
-        if String::eq_cstr(&lex, "import") {
+        if String::eq_cstr(lex, "import") {
             Parser::advance(p);
             // Skip until ;
             let mut skip_import: bool = true;
             while skip_import {
                 let t: Token = Parser::advance(p);
-                if String::eq_cstr(&t.lexeme, ";") {
+                if String::eq_cstr(t.lexeme, ";") {
                     skip_import = false;
                 }
             }
@@ -1653,7 +1661,7 @@ impl Parser {
         }
 
         // EOF
-        if String::eq_cstr(&lex, "") {
+        if String::eq_cstr(lex, "") {
             return false;
         }
 
@@ -1690,38 +1698,38 @@ impl LlvmEmitter {
     @unsafe
     fn new() -> LlvmEmitter {
         let e: LlvmEmitter;
-        e.buffer = String::new("");
+        e.buffer = "";
         e.tmp_counter = 0;
         e.label_counter = 0;
         
         // Emit LLVM Header
-        String::push_str(&mut e.buffer, &String::new("; ================================================\n"));
-        String::push_str(&mut e.buffer, &String::new(";  Generated by Y-Lang Self-Hosted Compiler (LLVM)\n"));
-        String::push_str(&mut e.buffer, &String::new("; ================================================\n\n"));
-        String::push_str(&mut e.buffer, &String::new("target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\"\n"));
-        String::push_str(&mut e.buffer, &String::new("target triple = \"x86_64-pc-windows-msvc\"\n\n"));
+        String::push_str(e.buffer, &"; ================================================\n");
+        String::push_str(e.buffer, &";  Generated by Y-Lang Self-Hosted Compiler (LLVM)\n");
+        String::push_str(e.buffer, &"; ================================================\n\n");
+        String::push_str(e.buffer, &"target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\"\n");
+        String::push_str(e.buffer, &"target triple = \"x86_64-pc-windows-msvc\"\n\n");
         
         return e;
     }
 
     @unsafe
     fn int_to_str(val: usize) -> String {
-        if val == 0 { return String::new("0"); }
+        if val == 0 { return "0"; }
         let mut temp: usize = val;
-        let mut s: String = String::new("");
+        let mut s: String = "";
         
         while temp > 0 {
             let digit: usize = temp % 10;
-            if digit == 0 { String::push(&mut s, '0'); }
-            else if digit == 1 { String::push(&mut s, '1'); }
-            else if digit == 2 { String::push(&mut s, '2'); }
-            else if digit == 3 { String::push(&mut s, '3'); }
-            else if digit == 4 { String::push(&mut s, '4'); }
-            else if digit == 5 { String::push(&mut s, '5'); }
-            else if digit == 6 { String::push(&mut s, '6'); }
-            else if digit == 7 { String::push(&mut s, '7'); }
-            else if digit == 8 { String::push(&mut s, '8'); }
-            else if digit == 9 { String::push(&mut s, '9'); }
+            if digit == 0 { String::push(s, '0'); }
+            else if digit == 1 { String::push(s, '1'); }
+            else if digit == 2 { String::push(s, '2'); }
+            else if digit == 3 { String::push(s, '3'); }
+            else if digit == 4 { String::push(s, '4'); }
+            else if digit == 5 { String::push(s, '5'); }
+            else if digit == 6 { String::push(s, '6'); }
+            else if digit == 7 { String::push(s, '7'); }
+            else if digit == 8 { String::push(s, '8'); }
+            else if digit == 9 { String::push(s, '9'); }
             temp = temp / 10;
         }
         // Reverse string if needed? Actually for unique SSA IDs, reverse is fine.
@@ -1731,8 +1739,8 @@ impl LlvmEmitter {
     @unsafe
     fn fresh_tmp(e: &mut LlvmEmitter) -> String {
         (*e).tmp_counter += 1;
-        let mut s: String = String::new("%t");
-        String::push_str(&mut s, &LlvmEmitter::int_to_str((*e).tmp_counter));
+        let mut s: String = "%t";
+        String::push_str(s, &LlvmEmitter::int_to_str((*e).tmp_counter));
         return s;
     }
 
@@ -1740,8 +1748,8 @@ impl LlvmEmitter {
     fn fresh_label(e: &mut LlvmEmitter, prefix: &String) -> String {
         (*e).label_counter += 1;
         let mut s: String = String::clone(prefix);
-        String::push_str(&mut s, &String::new("."));
-        String::push_str(&mut s, &LlvmEmitter::int_to_str((*e).label_counter));
+        String::push_str(s, &".");
+        String::push_str(s, &LlvmEmitter::int_to_str((*e).label_counter));
         return s;
     }
 
@@ -1750,37 +1758,37 @@ impl LlvmEmitter {
         let fdecl: FuncDecl = Vec::get_FuncDecl(&(*arena).funcs, func_idx);
         (*e).tmp_counter = 0;
 
-        String::push_str(&mut (*e).buffer, &String::new("define i32 @"));
-        String::push_str(&mut (*e).buffer, &fdecl.name);
-        String::push_str(&mut (*e).buffer, &String::new("("));
+        String::push_str((*e).buffer, &"define i32 @");
+        String::push_str((*e).buffer, &fdecl.name);
+        String::push_str((*e).buffer, &"(");
         
         let mut p: usize = 0;
         while p < fdecl.param_count {
             let param: ParamDecl = Vec::get_ParamDecl(&(*arena).params, fdecl.param_start + p);
-            String::push_str(&mut (*e).buffer, &String::new("i32 %"));
-            String::push_str(&mut (*e).buffer, &param.name);
-            String::push_str(&mut (*e).buffer, &String::new(".arg"));
+            String::push_str((*e).buffer, &"i32 %");
+            String::push_str((*e).buffer, &param.name);
+            String::push_str((*e).buffer, &".arg");
    
             if p + 1 < fdecl.param_count {
-                String::push_str(&mut (*e).buffer, &String::new(", "));
+                String::push_str((*e).buffer, &", ");
             }
             p += 1;
         }
         
-        String::push_str(&mut (*e).buffer, &String::new(") {\nentry:\n"));
+        String::push_str((*e).buffer, &") {\nentry:\n");
         
         // Alloca for params
         let mut ap: usize = 0;
         while ap < fdecl.param_count {
             let param: ParamDecl = Vec::get_ParamDecl(&(*arena).params, fdecl.param_start + ap);
-            String::push_str(&mut (*e).buffer, &String::new("  %"));
-            String::push_str(&mut (*e).buffer, &param.name);
-            String::push_str(&mut (*e).buffer, &String::new(" = alloca i32\n"));
-            String::push_str(&mut (*e).buffer, &String::new("  store i32 %"));
-            String::push_str(&mut (*e).buffer, &param.name);
-            String::push_str(&mut (*e).buffer, &String::new(".arg, ptr %"));
-            String::push_str(&mut (*e).buffer, &param.name);
-            String::push_str(&mut (*e).buffer, &String::new("\n"));
+            String::push_str((*e).buffer, &"  %");
+            String::push_str((*e).buffer, &param.name);
+            String::push_str((*e).buffer, &" = alloca i32\n");
+            String::push_str((*e).buffer, &"  store i32 %");
+            String::push_str((*e).buffer, &param.name);
+            String::push_str((*e).buffer, &".arg, ptr %");
+            String::push_str((*e).buffer, &param.name);
+            String::push_str((*e).buffer, &"\n");
             ap += 1;
         }
 
@@ -1791,7 +1799,7 @@ impl LlvmEmitter {
         }
         
         // Default return
-        String::push_str(&mut (*e).buffer, &String::new("  ret i32 0\n}\n\n"));
+        String::push_str((*e).buffer, &"  ret i32 0\n}\n\n");
     }
 
     @unsafe
@@ -1802,16 +1810,16 @@ impl LlvmEmitter {
             let var_name: String = stmt.data.Let._0;
             let init_idx: usize = stmt.data.Let._2;
             
-            String::push_str(&mut (*e).buffer, &String::new("  %"));
-            String::push_str(&mut (*e).buffer, &var_name);
-            String::push_str(&mut (*e).buffer, &String::new(" = alloca i32\n"));
+            String::push_str((*e).buffer, &"  %");
+            String::push_str((*e).buffer, &var_name);
+            String::push_str((*e).buffer, &" = alloca i32\n");
             if init_idx > 0 {
                 let val: String = LlvmEmitter::emit_expr(e, arena, init_idx - 1);
-                String::push_str(&mut (*e).buffer, &String::new("  store i32 "));
-                String::push_str(&mut (*e).buffer, &val);
-                String::push_str(&mut (*e).buffer, &String::new(", ptr %"));
-                String::push_str(&mut (*e).buffer, &var_name);
-                String::push_str(&mut (*e).buffer, &String::new("\n"));
+                String::push_str((*e).buffer, &"  store i32 ");
+                String::push_str((*e).buffer, &val);
+                String::push_str((*e).buffer, &", ptr %");
+                String::push_str((*e).buffer, &var_name);
+                String::push_str((*e).buffer, &"\n");
             }
         } else if stmt.tag == Stmt_TAG_Assign {
             let target_idx: usize = stmt.data.Assign._0;
@@ -1820,20 +1828,20 @@ impl LlvmEmitter {
             let val: String = LlvmEmitter::emit_expr(e, arena, value_idx - 1);
             let target_addr: String = LlvmEmitter::emit_lvalue(e, arena, target_idx - 1);
             
-            String::push_str(&mut (*e).buffer, &String::new("  store i32 "));
-            String::push_str(&mut (*e).buffer, &val);
-            String::push_str(&mut (*e).buffer, &String::new(", ptr "));
-            String::push_str(&mut (*e).buffer, &target_addr);
-            String::push_str(&mut (*e).buffer, &String::new("\n"));
+            String::push_str((*e).buffer, &"  store i32 ");
+            String::push_str((*e).buffer, &val);
+            String::push_str((*e).buffer, &", ptr ");
+            String::push_str((*e).buffer, &target_addr);
+            String::push_str((*e).buffer, &"\n");
         } else if stmt.tag == Stmt_TAG_Return {
             let ret_idx: usize = stmt.data.Return._0;
             if ret_idx > 0 {
                 let val: String = LlvmEmitter::emit_expr(e, arena, ret_idx - 1);
-                String::push_str(&mut (*e).buffer, &String::new("  ret i32 "));
-                String::push_str(&mut (*e).buffer, &val);
-                String::push_str(&mut (*e).buffer, &String::new("\n"));
+                String::push_str((*e).buffer, &"  ret i32 ");
+                String::push_str((*e).buffer, &val);
+                String::push_str((*e).buffer, &"\n");
             } else {
-                String::push_str(&mut (*e).buffer, &String::new("  ret i32 0\n"));
+                String::push_str((*e).buffer, &"  ret i32 0\n");
             }
         } else if stmt.tag == Stmt_TAG_If {
             let cond_idx: usize = stmt.data.If._0;
@@ -1843,87 +1851,87 @@ impl LlvmEmitter {
             let else_count: usize = stmt.data.If._4;
             
             let cond: String = LlvmEmitter::emit_expr(e, arena, cond_idx - 1);
-            let then_lbl: String = LlvmEmitter::fresh_label(e, &String::new("then"));
-            let else_lbl: String = LlvmEmitter::fresh_label(e, &String::new("else"));
-            let merge_lbl: String = LlvmEmitter::fresh_label(e, &String::new("merge"));
+            let then_lbl: String = LlvmEmitter::fresh_label(e, &"then");
+            let else_lbl: String = LlvmEmitter::fresh_label(e, &"else");
+            let merge_lbl: String = LlvmEmitter::fresh_label(e, &"merge");
             
-            String::push_str(&mut (*e).buffer, &String::new("  br i1 "));
-            String::push_str(&mut (*e).buffer, &cond);
-            String::push_str(&mut (*e).buffer, &String::new(", label %"));
-            String::push_str(&mut (*e).buffer, &then_lbl);
-            String::push_str(&mut (*e).buffer, &String::new(", label %"));
+            String::push_str((*e).buffer, &"  br i1 ");
+            String::push_str((*e).buffer, &cond);
+            String::push_str((*e).buffer, &", label %");
+            String::push_str((*e).buffer, &then_lbl);
+            String::push_str((*e).buffer, &", label %");
             if else_count > 0 {
-                String::push_str(&mut (*e).buffer, &else_lbl);
+                String::push_str((*e).buffer, &else_lbl);
             } else {
-                String::push_str(&mut (*e).buffer, &merge_lbl);
+                String::push_str((*e).buffer, &merge_lbl);
             }
-            String::push_str(&mut (*e).buffer, &String::new("\n"));
+            String::push_str((*e).buffer, &"\n");
             
             // Then block
-            String::push_str(&mut (*e).buffer, &then_lbl);
-            String::push_str(&mut (*e).buffer, &String::new(":\n"));
+            String::push_str((*e).buffer, &then_lbl);
+            String::push_str((*e).buffer, &":\n");
             let mut i: usize = 0;
             while i < then_count {
                 LlvmEmitter::emit_stmt(e, arena, then_start + i);
                 i += 1;
             }
-            String::push_str(&mut (*e).buffer, &String::new("  br label %"));
-            String::push_str(&mut (*e).buffer, &merge_lbl);
-            String::push_str(&mut (*e).buffer, &String::new("\n"));
+            String::push_str((*e).buffer, &"  br label %");
+            String::push_str((*e).buffer, &merge_lbl);
+            String::push_str((*e).buffer, &"\n");
             
             // Else block
             if else_count > 0 {
-                String::push_str(&mut (*e).buffer, &else_lbl);
-                String::push_str(&mut (*e).buffer, &String::new(":\n"));
+                String::push_str((*e).buffer, &else_lbl);
+                String::push_str((*e).buffer, &":\n");
                 let mut j: usize = 0;
                 while j < else_count {
                     LlvmEmitter::emit_stmt(e, arena, else_start + j);
                     j += 1;
                 }
-                String::push_str(&mut (*e).buffer, &String::new("  br label %"));
-                String::push_str(&mut (*e).buffer, &merge_lbl);
-                String::push_str(&mut (*e).buffer, &String::new("\n"));
+                String::push_str((*e).buffer, &"  br label %");
+                String::push_str((*e).buffer, &merge_lbl);
+                String::push_str((*e).buffer, &"\n");
             }
             
-            String::push_str(&mut (*e).buffer, &merge_lbl);
-            String::push_str(&mut (*e).buffer, &String::new(":\n"));
+            String::push_str((*e).buffer, &merge_lbl);
+            String::push_str((*e).buffer, &":\n");
         } else if stmt.tag == Stmt_TAG_While {
             let cond_idx: usize = stmt.data.While._0;
             let body_start: usize = stmt.data.While._1;
             let body_count: usize = stmt.data.While._2;
             
-            let cond_lbl: String = LlvmEmitter::fresh_label(e, &String::new("while.cond"));
-            let body_lbl: String = LlvmEmitter::fresh_label(e, &String::new("while.body"));
-            let end_lbl: String = LlvmEmitter::fresh_label(e, &String::new("while.end"));
+            let cond_lbl: String = LlvmEmitter::fresh_label(e, &"while.cond");
+            let body_lbl: String = LlvmEmitter::fresh_label(e, &"while.body");
+            let end_lbl: String = LlvmEmitter::fresh_label(e, &"while.end");
             
-            String::push_str(&mut (*e).buffer, &String::new("  br label %"));
-            String::push_str(&mut (*e).buffer, &cond_lbl);
-            String::push_str(&mut (*e).buffer, &String::new("\n"));
+            String::push_str((*e).buffer, &"  br label %");
+            String::push_str((*e).buffer, &cond_lbl);
+            String::push_str((*e).buffer, &"\n");
             
-            String::push_str(&mut (*e).buffer, &cond_lbl);
-            String::push_str(&mut (*e).buffer, &String::new(":\n"));
+            String::push_str((*e).buffer, &cond_lbl);
+            String::push_str((*e).buffer, &":\n");
             let cond: String = LlvmEmitter::emit_expr(e, arena, cond_idx - 1);
-            String::push_str(&mut (*e).buffer, &String::new("  br i1 "));
-            String::push_str(&mut (*e).buffer, &cond);
-            String::push_str(&mut (*e).buffer, &String::new(", label %"));
-            String::push_str(&mut (*e).buffer, &body_lbl);
-            String::push_str(&mut (*e).buffer, &String::new(", label %"));
-            String::push_str(&mut (*e).buffer, &end_lbl);
-            String::push_str(&mut (*e).buffer, &String::new("\n"));
+            String::push_str((*e).buffer, &"  br i1 ");
+            String::push_str((*e).buffer, &cond);
+            String::push_str((*e).buffer, &", label %");
+            String::push_str((*e).buffer, &body_lbl);
+            String::push_str((*e).buffer, &", label %");
+            String::push_str((*e).buffer, &end_lbl);
+            String::push_str((*e).buffer, &"\n");
             
-            String::push_str(&mut (*e).buffer, &body_lbl);
-            String::push_str(&mut (*e).buffer, &String::new(":\n"));
+            String::push_str((*e).buffer, &body_lbl);
+            String::push_str((*e).buffer, &":\n");
             let mut k: usize = 0;
             while k < body_count {
                 LlvmEmitter::emit_stmt(e, arena, body_start + k);
                 k += 1;
             }
-            String::push_str(&mut (*e).buffer, &String::new("  br label %"));
-            String::push_str(&mut (*e).buffer, &cond_lbl);
-            String::push_str(&mut (*e).buffer, &String::new("\n"));
+            String::push_str((*e).buffer, &"  br label %");
+            String::push_str((*e).buffer, &cond_lbl);
+            String::push_str((*e).buffer, &"\n");
             
-            String::push_str(&mut (*e).buffer, &end_lbl);
-            String::push_str(&mut (*e).buffer, &String::new(":\n"));
+            String::push_str((*e).buffer, &end_lbl);
+            String::push_str((*e).buffer, &":\n");
         } else if stmt.tag == Stmt_TAG_ExprStmt {
             let expr_idx: usize = stmt.data.ExprStmt._0;
             LlvmEmitter::emit_expr(e, arena, expr_idx - 1);
@@ -1934,8 +1942,8 @@ impl LlvmEmitter {
     fn emit_lvalue(e: &mut LlvmEmitter, arena: &AstArena, expr_idx: usize) -> String {
         let expr: Expr = Vec::get_Expr(&(*arena).exprs, expr_idx);
         if expr.tag == Expr_TAG_Ident {
-            let mut res: String = String::new("%");
-            String::push_str(&mut res, &expr.data.Ident._0);
+            let mut res: String = "%";
+            String::push_str(res, &expr.data.Ident._0);
             return res;
         }
         return LlvmEmitter::emit_expr(e, arena, expr_idx);
@@ -1949,11 +1957,11 @@ impl LlvmEmitter {
             return LlvmEmitter::int_to_str(expr.data.IntLit._0);
         } else if expr.tag == Expr_TAG_Ident {
             let tmp: String = LlvmEmitter::fresh_tmp(e);
-            String::push_str(&mut (*e).buffer, &String::new("  "));
-            String::push_str(&mut (*e).buffer, &tmp);
-            String::push_str(&mut (*e).buffer, &String::new(" = load i32, ptr %"));
-            String::push_str(&mut (*e).buffer, &expr.data.Ident._0);
-            String::push_str(&mut (*e).buffer, &String::new("\n"));
+            String::push_str((*e).buffer, &"  ");
+            String::push_str((*e).buffer, &tmp);
+            String::push_str((*e).buffer, &" = load i32, ptr %");
+            String::push_str((*e).buffer, &expr.data.Ident._0);
+            String::push_str((*e).buffer, &"\n");
             return tmp;
         } else if expr.tag == Expr_TAG_BinaryExpr {
             let lhs: String = LlvmEmitter::emit_expr(e, arena, expr.data.BinaryExpr._0 - 1);
@@ -1961,39 +1969,39 @@ impl LlvmEmitter {
             let op: BinaryOp = expr.data.BinaryExpr._1;
             let tmp: String = LlvmEmitter::fresh_tmp(e);
             
-            String::push_str(&mut (*e).buffer, &String::new("  "));
-            String::push_str(&mut (*e).buffer, &tmp);
-            String::push_str(&mut (*e).buffer, &String::new(" = "));
+            String::push_str((*e).buffer, &"  ");
+            String::push_str((*e).buffer, &tmp);
+            String::push_str((*e).buffer, &" = ");
             
-            if op == BinaryOp::Add { String::push_str(&mut (*e).buffer, &String::new("add i32 ")); }
-            else if op == BinaryOp::Sub { String::push_str(&mut (*e).buffer, &String::new("sub i32 ")); }
-            else if op == BinaryOp::Mul { String::push_str(&mut (*e).buffer, &String::new("mul i32 ")); }
-            else if op == BinaryOp::Div { String::push_str(&mut (*e).buffer, &String::new("sdiv i32 ")); }
-            else if op == BinaryOp::Eq { String::push_str(&mut (*e).buffer, &String::new("icmp eq i32 ")); }
-            else if op == BinaryOp::NotEq { String::push_str(&mut (*e).buffer, &String::new("icmp ne i32 ")); }
-            else if op == BinaryOp::Lt { String::push_str(&mut (*e).buffer, &String::new("icmp slt i32 ")); }
-            else if op == BinaryOp::Gt { String::push_str(&mut (*e).buffer, &String::new("icmp sgt i32 ")); }
-            else { String::push_str(&mut (*e).buffer, &String::new("add i32 ")); }
+            if op == BinaryOp::Add { String::push_str((*e).buffer, &"add i32 "); }
+            else if op == BinaryOp::Sub { String::push_str((*e).buffer, &"sub i32 "); }
+            else if op == BinaryOp::Mul { String::push_str((*e).buffer, &"mul i32 "); }
+            else if op == BinaryOp::Div { String::push_str((*e).buffer, &"sdiv i32 "); }
+            else if op == BinaryOp::Eq { String::push_str((*e).buffer, &"icmp eq i32 "); }
+            else if op == BinaryOp::NotEq { String::push_str((*e).buffer, &"icmp ne i32 "); }
+            else if op == BinaryOp::Lt { String::push_str((*e).buffer, &"icmp slt i32 "); }
+            else if op == BinaryOp::Gt { String::push_str((*e).buffer, &"icmp sgt i32 "); }
+            else { String::push_str((*e).buffer, &"add i32 "); }
             
-            String::push_str(&mut (*e).buffer, &lhs);
-            String::push_str(&mut (*e).buffer, &String::new(", "));
-            String::push_str(&mut (*e).buffer, &rhs);
-            String::push_str(&mut (*e).buffer, &String::new("\n"));
+            String::push_str((*e).buffer, &lhs);
+            String::push_str((*e).buffer, &", ");
+            String::push_str((*e).buffer, &rhs);
+            String::push_str((*e).buffer, &"\n");
             return tmp;
         } else if expr.tag == Expr_TAG_Call {
             let func_idx: usize = expr.data.Call._0;
             let func_expr: Expr = Vec::get_Expr(&(*arena).exprs, func_idx - 1);
-            let mut func_name: String = String::new("unknown");
+            let mut func_name: String = "unknown";
             if func_expr.tag == Expr_TAG_Ident {
                 func_name = String::clone(&func_expr.data.Ident._0);
             }
             
             let tmp: String = LlvmEmitter::fresh_tmp(e);
-            String::push_str(&mut (*e).buffer, &String::new("  "));
-            String::push_str(&mut (*e).buffer, &tmp);
-            String::push_str(&mut (*e).buffer, &String::new(" = call i32 @"));
-            String::push_str(&mut (*e).buffer, &func_name);
-            String::push_str(&mut (*e).buffer, &String::new("("));
+            String::push_str((*e).buffer, &"  ");
+            String::push_str((*e).buffer, &tmp);
+            String::push_str((*e).buffer, &" = call i32 @");
+            String::push_str((*e).buffer, &func_name);
+            String::push_str((*e).buffer, &"(");
             
             // Emit arguments
             let args_start: usize = expr.data.Call._1;
@@ -2002,17 +2010,17 @@ impl LlvmEmitter {
             while i < arg_count {
                 let arg_idx: usize = Vec::get_usize(&(*arena).arg_indices, args_start + i);
                 let arg_val: String = LlvmEmitter::emit_expr(e, arena, arg_idx - 1);
-                String::push_str(&mut (*e).buffer, &String::new("i32 "));
-                String::push_str(&mut (*e).buffer, &arg_val);
+                String::push_str((*e).buffer, &"i32 ");
+                String::push_str((*e).buffer, &arg_val);
                 if i + 1 < arg_count {
-                    String::push_str(&mut (*e).buffer, &String::new(", "));
+                    String::push_str((*e).buffer, &", ");
                 }
                 i += 1;
             }
-            String::push_str(&mut (*e).buffer, &String::new(")\n"));
+            String::push_str((*e).buffer, &")\n");
             return tmp;
         }
-        return String::new("0");
+        return "0";
     }
 }
 
@@ -2021,18 +2029,20 @@ impl LlvmEmitter {
 // ════════════════════════════════════════════════════════════
 
 @unsafe
-fn main() {
+fn main() -> i32 {
     println("--- Y-Lang Self-Hosted Compiler ---");
 
-    let source_file: String = String::new("test_program.yy");
+    let source_file: String = "test_program.yy";
     print("[*] Reading source file: ");
-    println(&source_file);
-    let source: String = File::read_to_string(&source_file);
+    println(source_file);
+    let source: String = File::read_to_string(source_file);
 
     println("[1/3] Lexing...");
+    println("DEBUG: Pre-Lexer");
     let mut lexer: Lexer = Lexer::new(&source);
+    println("DEBUG: Post-Lexer");
     let tokens: Vec = Lexer::tokenize(&mut lexer);
-    let token_count: usize = Vec::len(&tokens);
+    let token_count: usize = Vec::len(tokens);
     print("      -> Extracted ");
     print_int(token_count);
     println(" tokens.");
@@ -2040,8 +2050,8 @@ fn main() {
     println("[2/3] Parsing...");
     let mut arena: AstArena = AstArena::new();
     let mut parser: Parser = Parser::new(tokens, token_count);
-    Parser::parse_program(&mut parser, &mut arena);
-    let func_count: usize = Vec::len(&arena.funcs);
+    Parser::parse_program(parser, &mut arena);
+    let func_count: usize = Vec::len(arena.funcs);
     print("      -> Parsed ");
     print_int(func_count);
     println(" functions.");
@@ -2055,10 +2065,10 @@ fn main() {
         i += 1;
     }
 
-    let out_path: String = String::new("output.ll");
-    File::write(&out_path, &emitter.buffer);
+    let out_path: String = "output.ll";
+    File::write(out_path, &emitter.buffer);
     println("      -> Written to output.ll");
 
     println("--- Self-Compilation Complete ---");
-    return;
+    return 0;
 }

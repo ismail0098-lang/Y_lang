@@ -25,7 +25,7 @@
 #![allow(dead_code)]
 
 use std::fmt::Write;
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use crate::ast::*;
 
 pub struct LlvmEmitter {
@@ -37,17 +37,17 @@ pub struct LlvmEmitter {
     label_counter: usize,
     current_impl_target: Option<String>,
     /// Track local variables and their LLVM IR types
-    locals: HashMap<String, String>,
+    locals: BTreeMap<String, String>,
     /// Track what struct type a pointer local variable points to
-    pointee_types: HashMap<String, String>,
+    pointee_types: BTreeMap<String, String>,
     /// Track function return types
-    functions: HashMap<String, String>,
+    functions: BTreeMap<String, String>,
     /// Track struct fields: StructName -> Vec<(FieldName, IRType)>
-    structs: HashMap<String, Vec<(String, String)>>,
+    structs: BTreeMap<String, Vec<(String, String)>>,
     /// Track enums: EnumName -> has_data (true = tagged union, false = simple i32 tag)
-    enums: HashMap<String, bool>,
+    enums: BTreeMap<String, bool>,
     /// Track enum variant tags: EnumName_VariantName -> tag integer
-    enum_variants: HashMap<String, usize>,
+    enum_variants: BTreeMap<String, i32>,
     /// Track whether the current block already has a terminator
     block_terminated: bool,
     /// Store current cache policy during let bindings
@@ -62,6 +62,22 @@ pub struct LlvmEmitter {
 
 impl LlvmEmitter {
     pub fn new() -> Self {
+        let mut functions = BTreeMap::new();
+        // Pre-populate runtime function return types
+        functions.insert("String_new".into(), "ptr".into());
+        functions.insert("File_read_to_string".into(), "ptr".into());
+        functions.insert("yfile_read_to_string".into(), "ptr".into());
+        functions.insert("ystr_new".into(), "ptr".into());
+        functions.insert("ystr_clone".into(), "ptr".into());
+        functions.insert("yvec_new".into(), "ptr".into());
+        functions.insert("yvec_get".into(), "ptr".into());
+        functions.insert("malloc".into(), "ptr".into());
+        functions.insert("File_write".into(), "void".into());
+        functions.insert("yfile_write".into(), "void".into());
+        functions.insert("println".into(), "void".into());
+        functions.insert("print".into(), "void".into());
+        functions.insert("print_int".into(), "void".into());
+
         Self {
             output: String::new(),
             string_constants: Vec::new(),
@@ -69,12 +85,12 @@ impl LlvmEmitter {
             tmp_counter: 0,
             label_counter: 0,
             current_impl_target: None,
-            locals: HashMap::new(),
-            pointee_types: HashMap::new(),
-            functions: HashMap::new(),
-            structs: HashMap::new(),
-            enums: HashMap::new(),
-            enum_variants: HashMap::new(),
+            locals: BTreeMap::new(),
+            pointee_types: BTreeMap::new(),
+            functions,
+            structs: BTreeMap::new(),
+            enums: BTreeMap::new(),
+            enum_variants: BTreeMap::new(),
             block_terminated: false,
             current_cache_policy: None,
             current_load_hint: None,
@@ -156,8 +172,10 @@ impl LlvmEmitter {
             let dst_bits = Self::int_bits(dst_ty);
             if src_bits > dst_bits {
                 writeln!(&mut self.output, "  {} = trunc {} {} to {}", tmp, src_ty, val, dst_ty).unwrap();
-            } else {
+            } else if src_bits < dst_bits {
                 writeln!(&mut self.output, "  {} = sext {} {} to {}", tmp, src_ty, val, dst_ty).unwrap();
+            } else {
+                return val.to_string();
             }
         } else if src_ptr && dst_ptr {
             return val.to_string(); // ptr -> ptr, no conversion needed in opaque-ptr mode
@@ -222,7 +240,7 @@ impl LlvmEmitter {
     // ── Type Mapping ────────────────────────────────────────
 
     fn emit_type(&self, ty: &Type) -> String {
-        match ty {
+        let res: String = match ty {
             Type::Primitive(name, _) => match name.as_str() {
                 "I32" | "u32" | "i32" => "i32".into(),
                 "I64" | "usize" | "i64" => "i64".into(),
@@ -232,7 +250,7 @@ impl LlvmEmitter {
                 "bool" => "i1".into(),
                 "char" | "i8" | "u8" => "i8".into(),
                 "I16" | "u16" | "i16" => "i16".into(),
-                "String" => "ptr".into(),
+                "String" | "Vec" | "ptr" => "ptr".into(),
                 _ => "i32".into(),
             },
             Type::Ident(name, _) => match name.as_str() {
@@ -243,18 +261,18 @@ impl LlvmEmitter {
                 "bool" => "i1".into(),
                 "char" | "i8" | "u8" => "i8".into(),
                 "I16" | "u16" | "i16" => "i16".into(),
-                "String" => "ptr".into(),
-                "Vec" => "ptr".into(),
+                "String" | "Vec" | "ptr" => "ptr".into(),
                 other => {
-                    // Check if this is a known simple enum (maps to i32)
-                    if let Some(has_data) = self.enums.get(other) {
+                    if other == "ptr" {
+                        "ptr".into()
+                    } else if let Some(has_data) = self.enums.get(other) {
                         if *has_data {
-                            format!("%{}", other) // tagged union struct type
+                            format!("%{}", other)
                         } else {
-                            "i32".into() // simple enum = integer tag
+                            "i32".into()
                         }
                     } else {
-                        format!("%{}", other) // Custom struct types passed by value
+                        format!("%{}", other)
                     }
                 }
             },
@@ -264,13 +282,33 @@ impl LlvmEmitter {
                 _ => "ptr".into(),
             },
             Type::Array { .. } => "ptr".into(),
-        }
+        };
+        if res == "%ptr" { "ptr".into() } else { res }
     }
 
     // ── Entry Point ─────────────────────────────────────────
 
     pub fn emit_program(&mut self, prog: &Program, profile: &crate::sentinel::HardwareProfile) -> String {
         // Phase 0: Collect struct layouts and function signatures
+        self.functions.insert("ystr_new".into(), "ptr".into());
+        self.functions.insert("ystr_len".into(), "i64".into());
+        self.functions.insert("ystr_eq".into(), "i1".into());
+        self.functions.insert("ystr_eq_cstr".into(), "i1".into());
+        self.functions.insert("ystr_char_at".into(), "i8".into());
+        self.functions.insert("ystr_clone".into(), "ptr".into());
+        self.functions.insert("yvec_new".into(), "ptr".into());
+        self.functions.insert("yvec_len".into(), "i64".into());
+        self.functions.insert("yvec_get".into(), "ptr".into());
+        self.functions.insert("yvec_get_char".into(), "i8".into());
+        self.functions.insert("yfile_read_to_string".into(), "ptr".into());
+        self.functions.insert("yfile_write".into(), "void".into());
+        self.functions.insert("printf".into(), "i32".into());
+        self.functions.insert("malloc".into(), "ptr".into());
+        self.functions.insert("free".into(), "void".into());
+        self.functions.insert("exit".into(), "void".into());
+        self.functions.insert("println".into(), "void".into());
+        self.functions.insert("print_int".into(), "void".into());
+
         for item in &prog.items {
             match item {
                 Item::Struct(s) => {
@@ -297,7 +335,7 @@ impl LlvmEmitter {
                     let has_data = e.variants.iter().any(|v| v.fields.is_some());
                     self.enums.insert(e.name.clone(), has_data);
                     for (i, v) in e.variants.iter().enumerate() {
-                        self.enum_variants.insert(format!("{}_{}", e.name, v.name), i);
+                        self.enum_variants.insert(format!("{}_{}", e.name, v.name), i as i32);
                     }
                 }
                 _ => {}
@@ -342,8 +380,8 @@ impl LlvmEmitter {
             if let Item::Enum(e) = item {
                 let has_data = e.variants.iter().any(|v| v.fields.is_some());
                 if has_data {
-                    // LLVM represents tagged unions as { i32, [4 x i64] } (approximate placeholder size)
-                    self.wln(&format!("%{} = type {{ i32, [4 x i64] }}", e.name));
+                    // LLVM represents tagged unions as { i32, [8 x i64] }
+                    self.wln(&format!("%{} = type {{ i32, [8 x i64] }}", e.name));
                 }
             }
         }
@@ -409,8 +447,8 @@ impl LlvmEmitter {
             {
                 // Look up the return type from the functions table, or use hardcoded built-ins
                 let ret_ty = match fname.as_str() {
-                    "println" | "print" | "print_int" | "File_write" => "void".into(),
-                    "String_new" | "File_read_to_string" => "ptr".into(),
+                    "println" | "print" | "print_int" | "File_write" | "yfile_write" | "yvec_push" | "ystr_push" | "ystr_push_str" => "void".into(),
+                    "String_new" | "File_read_to_string" | "yfile_read_to_string" | "ystr_new" | "ystr_clone" | "yvec_new" | "yvec_get" | "malloc" => "ptr".into(),
                     _ => self.functions.get(fname).cloned().unwrap_or_else(|| "i32".into()),
                 };
                 writeln!(&mut extern_decls, "declare {} @{}(...)", ret_ty, fname).unwrap();
@@ -874,19 +912,19 @@ impl LlvmEmitter {
                             writeln!(&mut self.output, "  {} = getelementptr {}, ptr {}, i32 0, i32 0", tmp, base_ty, base_val).unwrap();
                             return tmp;
                         } else if member == "data" {
-                            // .data -> index 1 (payload: [4 x i64])
+                            // .data -> index 1 (payload: [8 x i64])
                             writeln!(&mut self.output, "  {} = getelementptr {}, ptr {}, i32 0, i32 1", tmp, base_ty, base_val).unwrap();
                             return tmp;
                         }
                     }
                 }
                 
-                if base_ty == "[4 x i64]" {
+                if base_ty == "[8 x i64]" {
                     writeln!(&mut self.output, "  ; lvalue payload overlay .{}", member).unwrap();
                     if member.starts_with('_') {
-                        // ._N -> index N into the [4 x i64] payload
+                        // ._N -> index N into the [8 x i64] payload
                         let idx: usize = member[1..].parse().unwrap_or(0);
-                        writeln!(&mut self.output, "  {} = getelementptr [4 x i64], ptr {}, i32 0, i32 {}", tmp, base_val, idx).unwrap();
+                        writeln!(&mut self.output, "  {} = getelementptr [8 x i64], ptr {}, i32 0, i32 {}", tmp, base_val, idx).unwrap();
                         return tmp;
                     } else {
                         // .VariantName -> pass-through (overlay on the data payload)
@@ -911,7 +949,8 @@ impl LlvmEmitter {
             Expr::Index { base, index, .. } => {
                 let base_val = self.emit_expr(base);
                 let idx_val = self.emit_expr(index);
-                let elem_ty = "i32"; // Fallback
+                let base_ty = self.infer_type(base);
+                let elem_ty = if base_ty == "ptr" { "i64" } else { base_ty.as_str() };
                 let tmp = self.fresh_tmp();
                 writeln!(&mut self.output, "  {} = getelementptr {}, ptr {}, i64 {}", tmp, elem_ty, base_val, idx_val).unwrap();
                 tmp
@@ -958,6 +997,19 @@ impl LlvmEmitter {
                 let r = self.emit_expr(right);
                 let ty = self.infer_type(left);
                 let tmp = self.fresh_tmp();
+                
+                // Special case: Enum comparison (compare tags)
+                let base_name = ty.trim_start_matches('%');
+                if self.enums.contains_key(base_name) && (op == &BinaryOp::Eq || op == &BinaryOp::NotEq) {
+                    let l_tag = self.fresh_tmp();
+                    let r_tag = self.fresh_tmp();
+                    writeln!(&mut self.output, "  {} = extractvalue {} {}, 0", l_tag, ty, l).unwrap();
+                    writeln!(&mut self.output, "  {} = extractvalue {} {}, 0", r_tag, ty, r).unwrap();
+                    let instr = if op == &BinaryOp::Eq { "icmp eq" } else { "icmp ne" };
+                    writeln!(&mut self.output, "  {} = {} i32 {}, {}", tmp, instr, l_tag, r_tag).unwrap();
+                    return tmp;
+                }
+
                 let instr = self.binop_to_llvm(op, &ty);
                 writeln!(&mut self.output, "  {} = {} {} {}, {}", tmp, instr, ty, l, r).unwrap();
                 tmp
@@ -981,7 +1033,9 @@ impl LlvmEmitter {
                         return self.emit_lvalue(operand);
                     }
                     UnaryOp::Deref => {
-                        writeln!(&mut self.output, "  {} = load i32, ptr {}", tmp, val).unwrap();
+                        let inner_ty = self.infer_type(operand);
+                        let load_ty = if inner_ty == "ptr" { "i64" } else { inner_ty.as_str() };
+                        writeln!(&mut self.output, "  {} = load {}, ptr {}", tmp, load_ty, val).unwrap();
                     }
                 }
                 tmp
@@ -990,12 +1044,66 @@ impl LlvmEmitter {
                 let func_name = self.emit_call_target(func);
                 self.called_functions.push(func_name.clone());
 
-                // --- Fix 1: Vec_push passes address, not loaded value ---
-                if func_name == "Vec_push" && args.len() == 2 {
-                    let vec_val = self.emit_expr(&args[0]);
-                    let elem_addr = self.emit_lvalue(&args[1]);
-                    writeln!(&mut self.output, "  call void @Vec_push(ptr {}, ptr {})", vec_val, elem_addr).unwrap();
-                    return self.fresh_tmp().replace("%t", "%_void");
+                if (func_name.starts_with("String_") || func_name.starts_with("Vec_") || func_name.starts_with("File_") || func_name.starts_with("yfile_") || func_name.starts_with("ystr_") || func_name.starts_with("yvec_")) && args.len() >= 1 {
+                    if func_name == "Vec_push" && args.len() == 2 {
+                        let vec_val = self.emit_expr(&args[0]);
+                        let elem_addr = self.emit_lvalue(&args[1]);
+                        writeln!(&mut self.output, "  call void @Vec_push(ptr {}, ptr {})", vec_val, elem_addr).unwrap();
+                        return self.fresh_tmp().replace("%t", "%_void");
+                    }
+                    
+                    let mut new_arg_strs = Vec::new();
+                    for (i, arg) in args.iter().enumerate() {
+                        let mut arg_val = self.emit_expr(arg);
+                        let arg_ty = self.infer_type(arg);
+                        
+                        if arg_ty.starts_with('&') && (arg_ty.contains("String") || arg_ty.contains("Vec") || arg_ty.contains("ptr")) {
+                            let tmp = self.fresh_tmp();
+                            writeln!(&mut self.output, "  {} = load ptr, ptr {}", tmp, arg_val).unwrap();
+                            arg_val = tmp;
+                        }
+                        
+                        let llvm_ty = if arg_ty.starts_with('&') || arg_ty == "String" || arg_ty == "Vec" || arg_ty == "ptr" { "ptr".to_string() } else { arg_ty };
+                        new_arg_strs.push(format!("{} {}", llvm_ty, arg_val));
+                    }
+                    
+                    if func_name.starts_with("Vec_get_") && args.len() == 2 {
+                        let vec_val = &new_arg_strs[0].split_whitespace().last().unwrap();
+                        let idx_val = &new_arg_strs[1].split_whitespace().last().unwrap();
+                        let elem_ptr = self.fresh_tmp();
+                        writeln!(&mut self.output, "  {} = call ptr @yvec_get(ptr {}, i64 {})", elem_ptr, vec_val, idx_val).unwrap();
+                        
+                        let ret_type_name = &func_name[8..];
+                        let llvm_ret_ty = match ret_type_name {
+                            "usize" | "I64" | "i64" => "i64".to_string(),
+                            "I32" | "i32" | "int" => "i32".to_string(),
+                            "bool" => "i1".to_string(),
+                            "char" => "i8".to_string(),
+                            "String" | "Vec" | "ptr" => "ptr".to_string(),
+                            _ => format!("%{}", ret_type_name),
+                        };
+                        let tmp = self.fresh_tmp();
+                        writeln!(&mut self.output, "  {} = load {}, ptr {}", tmp, llvm_ret_ty, elem_ptr).unwrap();
+                        return tmp;
+                    }
+
+                    let ret_ty: String = match func_name.as_str() {
+                        "String_new" | "String_clone" | "Vec_new" | "Vec_get" | "File_read_to_string" | "yfile_read_to_string" | "ystr_new" | "ystr_clone" | "yvec_new" | "yvec_get" | "malloc" => "ptr".into(),
+                        "String_len" | "ystr_len" | "Vec_len" | "yvec_len" => "i64".into(),
+                        "String_eq" | "String_eq_cstr" | "ystr_eq" | "ystr_eq_cstr" => "i1".into(),
+                        "String_char_at" | "ystr_char_at" | "yvec_get_char" => "i8".into(),
+                        _ => "void".into(),
+                    };
+                    
+                    let tmp = self.fresh_tmp();
+                    let args_joined = new_arg_strs.join(", ");
+                    if ret_ty == "void" {
+                        writeln!(&mut self.output, "  call void @{}({})", func_name, args_joined).unwrap();
+                        return tmp.replace("%t", "%_void");
+                    } else {
+                        writeln!(&mut self.output, "  {} = call {} @{}({})", tmp, ret_ty, func_name, args_joined).unwrap();
+                        return tmp;
+                    }
                 }
 
                 let mut arg_strs = Vec::new();
@@ -1042,35 +1150,6 @@ impl LlvmEmitter {
                         writeln!(&mut self.output, "  {} = load {}, ptr {}{}", tmp, load_ty, ptr_val, metadata).unwrap();
                         return tmp;
                     }
-                    "println" | "print" => {
-                        let is_ln = func_name == "println";
-                        let fmt_str = if is_ln { "@.fmt.sn" } else { "@.fmt.s" };
-
-                        if !args.is_empty() {
-                            // Extract char* data from YStr* which is at offset 0
-                            let arg_val = arg_strs[0].split_whitespace().last().unwrap();
-                            let data_ptr = self.fresh_tmp();
-                            writeln!(&mut self.output, "  {} = load ptr, ptr {}", data_ptr, arg_val).unwrap();
-
-                            let tmp = self.fresh_tmp();
-                            writeln!(&mut self.output, "  {} = call i32 (ptr, ...) @printf(ptr {}, ptr {})", tmp, fmt_str, data_ptr).unwrap();
-                            return tmp;
-                        }
-
-                        if is_ln {
-                            let tmp = self.fresh_tmp();
-                            let nl = self.register_string("");
-                            writeln!(&mut self.output, "  {} = call i32 (ptr, ...) @printf(ptr {}, ptr {})", tmp, fmt_str, nl).unwrap();
-                            return tmp;
-                        } else {
-                            return self.fresh_tmp().replace("%t", "%_void");
-                        }
-                    }
-                    "print_int" => {
-                        let tmp = self.fresh_tmp();
-                        writeln!(&mut self.output, "  {} = call i32 (ptr, ...) @printf(ptr @.fmt.d, {})", tmp, arg_strs[0]).unwrap();
-                        return tmp;
-                    }
                     _ => {}
                 }
 
@@ -1100,8 +1179,8 @@ impl LlvmEmitter {
                 }
 
                 let ret_ty = match func_name.as_str() {
-                    "println" | "print" | "print_int" | "File_write" => "void".into(),
-                    "String_new" | "File_read_to_string" => "ptr".into(),
+                    "println" | "print" | "print_int" | "File_write" | "yfile_write" | "yvec_push" | "ystr_push" | "ystr_push_str" => "void".into(),
+                    "String_new" | "File_read_to_string" | "yfile_read_to_string" | "ystr_new" | "ystr_clone" | "yvec_new" | "yvec_get" | "malloc" => "ptr".into(),
                     _ => self.functions.get(&func_name).cloned().unwrap_or_else(|| "i32".into()),
                 };
                 let tmp = self.fresh_tmp();
@@ -1118,7 +1197,7 @@ impl LlvmEmitter {
                 if let Some(&tag) = self.enum_variants.get(&full_name) {
                     if let Some(&has_data) = self.enums.get(namespace) {
                         if has_data {
-                            return format!("{{ i32 {}, [4 x i64] zeroinitializer }}", tag);
+                            return format!("{{ i32 {}, [8 x i64] zeroinitializer }}", tag);
                         }
                     }
                     tag.to_string()
@@ -1133,7 +1212,8 @@ impl LlvmEmitter {
             }
             Expr::Index { .. } => {
                 let lval = self.emit_lvalue(expr);
-                self.emit_load(&lval, "i32") // Fallback
+                let ty = self.infer_type(expr);
+                self.emit_load(&lval, &ty)
             }
             Expr::SelfLit(_) => "%self".into(),
             Expr::StructLit { name, fields, .. } => {
@@ -1284,16 +1364,16 @@ impl LlvmEmitter {
                         if member == "tag" {
                             return "i32".into();
                         } else if member == "data" {
-                            return "[4 x i64]".into();
+                            return "[8 x i64]".into();
                         }
                     }
                 }
                 
-                if base_ty == "[4 x i64]" {
+                if base_ty == "[8 x i64]" {
                     if member.starts_with('_') {
                         return "i64".into(); // The payload elements are i64
                     } else {
-                        return "[4 x i64]".into(); // e.g. `.Let` overlays the payload
+                        return "[8 x i64]".into(); // e.g. `.Let` overlays the payload
                     }
                 }
 
@@ -1363,7 +1443,7 @@ impl LlvmEmitter {
                 if let Some(&has_data) = self.enums.get(base_name) {
                     if has_data {
                         if member == "data" || member.starts_with('_') {
-                            return "[4 x i64]".into();
+                            return "[8 x i64]".into();
                         }
                         if member == "tag" {
                             return "i32".into();
@@ -1372,11 +1452,11 @@ impl LlvmEmitter {
                     }
                 }
                 
-                if base_ty == "[4 x i64]" {
+                if base_ty == "[8 x i64]" {
                     if member.starts_with('_') {
                         return "i64".into();
                     } else {
-                        return "[4 x i64]".into();
+                        return "[8 x i64]".into();
                     }
                 }
 
