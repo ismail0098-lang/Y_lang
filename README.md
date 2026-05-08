@@ -1,4 +1,6 @@
-# Y Compiler
+# Y Compile
+
+This is just pure pain and agony honestly instant-ngp all over again
 
 Y is a systems programming language and self-hosted compiler infrastructure. Initially designed to support the YSU-Engine (a secure OS and GPU kernel engine), Y-Lang is evolving into a full-featured, general-purpose systems language.
 
