@@ -713,6 +713,43 @@ mod tests {
         Lexer::new(src).tokenize().into_iter().map(|t| t.kind).collect()
     }
 
+
+    #[test]
+    fn test_tokenize() {
+        let mut lexer = Lexer::new("let x = 42;");
+        let tokens = lexer.tokenize();
+
+        assert_eq!(tokens.len(), 6);
+
+        assert_eq!(tokens[0].kind, TokenKind::Let);
+        assert_eq!(tokens[0].lexeme, "let");
+        assert_eq!(tokens[0].line, 1);
+        assert_eq!(tokens[0].col, 1);
+
+        assert_eq!(tokens[1].kind, TokenKind::Ident("x".to_string()));
+        assert_eq!(tokens[1].lexeme, "x");
+        assert_eq!(tokens[1].line, 1);
+        assert_eq!(tokens[1].col, 5);
+
+        assert_eq!(tokens[2].kind, TokenKind::Assign);
+        assert_eq!(tokens[2].lexeme, "=");
+        assert_eq!(tokens[2].line, 1);
+        assert_eq!(tokens[2].col, 7);
+
+        assert_eq!(tokens[3].kind, TokenKind::IntLit(42));
+        assert_eq!(tokens[3].lexeme, "42");
+        assert_eq!(tokens[3].line, 1);
+        assert_eq!(tokens[3].col, 9);
+
+        assert_eq!(tokens[4].kind, TokenKind::Semicolon);
+        assert_eq!(tokens[4].lexeme, ";");
+        assert_eq!(tokens[4].line, 1);
+        assert_eq!(tokens[4].col, 11);
+
+        assert_eq!(tokens[5].kind, TokenKind::Eof);
+        assert_eq!(tokens[5].lexeme, "");
+    }
+
     #[test]
     fn test_kernel_keyword() {
         let kinds = lex("kernel matmul");
